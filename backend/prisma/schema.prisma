@@ -1,0 +1,242 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  orgId        String
+  role         UserRole @default(USER)
+  email        String   @unique
+  provider     String // google, microsoft, etc.
+  consentFlags Json     @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+model Organization {
+  id            String   @id @default(cuid())
+  name          String
+  plan          String   @default("free") // free, pro, enterprise
+  region        String   @default("us") // us, eu, etc.
+  retentionDays Int      @default(30)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  users     User[]
+  meetings  Meeting[]
+  apiKeys   ApiKey[]
+  auditLogs AuditLog[]
+  webhooks  Webhook[]
+
+  @@map("organizations")
+}
+
+model Meeting {
+  id            String        @id @default(cuid())
+  orgId         String
+  title         String
+  platform      String // zoom, google-meet, teams
+  meetingLink   String?
+  scheduledAt   DateTime?
+  startedAt     DateTime?
+  endedAt       DateTime?
+  status        MeetingStatus @default(SCHEDULED)
+  consentFlags  Json          @default("{}")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  recordings   Recording[]
+  transcripts  Transcript[]
+  summaries    Summary[]
+
+  @@map("meetings")
+}
+
+model Recording {
+  id               String    @id @default(cuid())
+  meetingId        String
+  hasVideo         Boolean   @default(false)
+  audioUrl         String?
+  videoUrl         String?
+  sizeBytes        BigInt    @default(0)
+  checksum         String?
+  storageRegion    String    @default("us")
+  encryptionMeta   Json      @default("{}")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Relations
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@map("recordings")
+}
+
+model Transcript {
+  id              String    @id @default(cuid())
+  meetingId       String
+  language        String    @default("en")
+  text            String
+  wordsJson       Json      @default("[]")
+  speakerTurnsJson Json     @default("[]")
+  accuracy        Float?
+  readyAt         DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@map("transcripts")
+}
+
+model Summary {
+  id               String    @id @default(cuid())
+  meetingId        String
+  model            String    @default("gpt-4")
+  summaryText      String
+  decisionsJson    Json      @default("[]")
+  actionItemsJson  Json      @default("[]")
+  participantsJson Json      @default("[]")
+  readyAt          DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Relations
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@map("summaries")
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  type        String // TRANSCRIBE, SUMMARIZE, RETENTION, WEBHOOK
+  status      JobStatus @default(PENDING)
+  attempts    Int       @default(0)
+  payloadJson Json      @default("{}")
+  error       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("jobs")
+}
+
+model ApiKey {
+  id         String   @id @default(cuid())
+  orgId      String
+  hash       String   @unique // bcrypt hash of the key
+  label      String
+  scopes     String[] @default([]) // meetings:read, meetings:write, etc.
+  lastUsedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@map("api_keys")
+}
+
+model AuditLog {
+  id        String    @id @default(cuid())
+  orgId     String
+  actorType ActorType
+  actorId   String
+  action    String // api_key_created, data_exported, webhook_delivered, etc.
+  metaJson  Json      @default("{}")
+  createdAt DateTime  @default(now())
+
+  // Relations
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@map("audit_logs")
+}
+
+model Webhook {
+  id        String   @id @default(cuid())
+  orgId     String
+  url       String
+  secret    String // HMAC secret
+  events    String[] @default([]) // meeting.processed, meeting.failed, etc.
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  deliveries   WebhookDelivery[]
+
+  @@map("webhooks")
+}
+
+model WebhookDelivery {
+  id           String            @id @default(cuid())
+  webhookId    String
+  event        String
+  payloadJson  Json
+  status       WebhookStatus     @default(PENDING)
+  attempts     Int               @default(0)
+  responseCode Int?
+  responseBody String?
+  nextRetryAt  DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  // Relations
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@map("webhook_deliveries")
+}
+
+// Enums
+enum UserRole {
+  USER
+  ADMIN
+  SERVICE
+}
+
+enum MeetingStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum JobStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ActorType {
+  USER
+  API_KEY
+  SYSTEM
+}
+
+enum WebhookStatus {
+  PENDING
+  DELIVERED
+  FAILED
+  CANCELLED
+}
