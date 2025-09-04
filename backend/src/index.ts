@@ -14,6 +14,7 @@ import { webhooksRoutes } from './api/v1/webhooks';
 import { authRoutes } from './api/v1/auth';
 import { searchRoutes } from './api/v1/search';
 
+
 // Job Queue
 import { setupQueue } from './jobs/queue';
 import dotenv from 'dotenv';
@@ -152,6 +153,7 @@ async function buildApp() {
     await app.register(webhooksRoutes, { prefix: '/v1' });
     await app.register(authRoutes, { prefix: '/v1' });
     await app.register(searchRoutes, { prefix: '/v1' });
+
 
     // Global error handler
     app.setErrorHandler(async (error, request, reply) => {

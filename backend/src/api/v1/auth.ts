@@ -1,14 +1,300 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
+import { jwtVerify, createRemoteJWKSet } from 'jose';
 import {
     CreateApiKeySchema,
     IdParamSchema,
     ErrorResponseSchema
 } from './schemas';
 import { requireAuth, requireOrgAccess } from '../../middleware/auth';
+import { generateJWT } from '../../middleware/auth';
 
 export async function authRoutes(fastify: FastifyInstance) {
+    // Supabase OAuth token exchange → backend JWT
+    fastify.post('/supabase/exchange', {
+        schema: {
+            body: {
+                type: 'object',
+                properties: {
+                    accessToken: { type: 'string' },
+                },
+                required: ['accessToken'],
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        token: { type: 'string' },
+                        user: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'string' },
+                                email: { type: 'string' },
+                                role: { type: 'string' },
+                            },
+                        },
+                    },
+                },
+                400: ErrorResponseSchema,
+            },
+            tags: ['Authentication'],
+            summary: 'Exchange Supabase access token for backend JWT',
+        },
+    }, async (request: FastifyRequest<{ Body: { accessToken: string } }>, reply: FastifyReply) => {
+        const { accessToken } = request.body;
+        const SUPABASE_URL = process.env.SUPABASE_URL;
+        const SUPABASE_JWKS_URL = process.env.SUPABASE_JWKS_URL || (SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/certs` : undefined);
+
+        if (!SUPABASE_JWKS_URL) {
+            return reply.status(400).send({ error: 'Supabase configuration missing' });
+        }
+
+        try {
+            const JWKS = createRemoteJWKSet(new URL(SUPABASE_JWKS_URL));
+            const { payload } = await jwtVerify(accessToken, JWKS);
+
+            const email = (payload as any).email as string | undefined;
+            const sub = (payload as any).sub as string | undefined;
+
+            if (!email || !sub) {
+                return reply.status(401).send({ error: 'Invalid Supabase token' });
+            }
+
+            // Find or create user/org
+            let user = await fastify.prisma.user.findUnique({ where: { email } });
+            if (!user) {
+                const organization = await fastify.prisma.organization.create({
+                    data: {
+                        name: email.split('@')[1] || 'Personal',
+                        plan: 'free',
+                        region: 'us',
+                        retentionDays: 30,
+                    },
+                });
+                user = await fastify.prisma.user.create({
+                    data: {
+                        orgId: organization.id,
+                        email,
+                        role: 'ADMIN',
+                        provider: 'supabase',
+                        consentFlags: {},
+                    },
+                });
+            }
+
+            const token = generateJWT(user.id, user.orgId, '24h');
+            return reply.send({ token, user: { id: user.id, email: user.email, role: user.role } });
+        } catch (error) {
+            if ((error as any).statusCode) throw error as any;
+            fastify.log.error(error, 'Supabase exchange failed');
+            return reply.status(401).send({ error: 'Supabase verification failed' });
+        }
+    });
+    // User registration
+    fastify.post('/register', {
+        schema: {
+            body: {
+                type: 'object',
+                properties: {
+                    email: { type: 'string', format: 'email' },
+                    password: { type: 'string', minLength: 8 },
+                    organizationName: { type: 'string', minLength: 1 },
+                },
+                required: ['email', 'password', 'organizationName'],
+            },
+            response: {
+                201: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean' },
+                        message: { type: 'string' },
+                        user: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'string' },
+                                email: { type: 'string' },
+                                role: { type: 'string' },
+                            },
+                        },
+                        organization: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'string' },
+                                name: { type: 'string' },
+                            },
+                        },
+                    },
+                },
+                400: ErrorResponseSchema,
+                409: ErrorResponseSchema,
+            },
+            tags: ['Authentication'],
+            summary: 'Register new user',
+            description: 'Creates a new user account and organization',
+        },
+    }, async (request: FastifyRequest<{ Body: any }>, reply: FastifyReply) => {
+        const { email, password, organizationName } = request.body;
+
+        try {
+            // Check if user already exists
+            const existingUser = await fastify.prisma.user.findUnique({
+                where: { email },
+            });
+
+            if (existingUser) {
+                return reply.status(409).send({ error: 'User already exists' });
+            }
+
+            // Create organization
+            const organization = await fastify.prisma.organization.create({
+                data: {
+                    name: organizationName,
+                    plan: 'free',
+                    region: 'us',
+                    retentionDays: 30,
+                },
+            });
+
+            // Hash password
+            const hashedPassword = await bcrypt.hash(password, 12);
+
+            // Create user
+            const user = await fastify.prisma.user.create({
+                data: {
+                    orgId: organization.id,
+                    email,
+                    role: 'ADMIN',
+                    provider: 'email',
+                    consentFlags: {},
+                },
+            });
+
+            // Store hashed password in a separate table or field
+            // For now, we'll store it in consentFlags (not ideal, but works for demo)
+            await fastify.prisma.user.update({
+                where: { id: user.id },
+                data: {
+                    consentFlags: { passwordHash: hashedPassword },
+                },
+            });
+
+            return reply.status(201).send({
+                success: true,
+                message: 'User registered successfully',
+                user: {
+                    id: user.id,
+                    email: user.email,
+                    role: user.role,
+                },
+                organization: {
+                    id: organization.id,
+                    name: organization.name,
+                },
+            });
+        } catch (error: any) {
+            if (error.statusCode) throw error;
+            fastify.log.error(error, 'Failed to register user');
+            throw new Error('Failed to register user');
+        }
+    });
+
+    // User login
+    fastify.post('/login', {
+        schema: {
+            body: {
+                type: 'object',
+                properties: {
+                    email: { type: 'string', format: 'email' },
+                    password: { type: 'string' },
+                },
+                required: ['email', 'password'],
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean' },
+                        message: { type: 'string' },
+                        token: { type: 'string' },
+                        user: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'string' },
+                                email: { type: 'string' },
+                                role: { type: 'string' },
+                            },
+                        },
+                    },
+                },
+                401: ErrorResponseSchema,
+            },
+            tags: ['Authentication'],
+            summary: 'User login',
+            description: 'Authenticates user with email and password',
+        },
+    }, async (request: FastifyRequest<{ Body: any }>, reply: FastifyReply) => {
+        const { email, password } = request.body;
+
+        try {
+            // Find user
+            const user = await fastify.prisma.user.findUnique({
+                where: { email },
+                include: {
+                    organization: {
+                        select: {
+                            id: true,
+                            name: true,
+                        },
+                    },
+                },
+            });
+
+            if (!user) {
+                return reply.status(401).send({ error: 'Invalid credentials' });
+            }
+
+            // Get password hash from consentFlags
+            const passwordHash = (user.consentFlags as any)?.passwordHash;
+            if (!passwordHash) {
+                return reply.status(401).send({ error: 'Invalid credentials' });
+            }
+
+            // Verify password
+            const isValidPassword = await bcrypt.compare(password, passwordHash);
+            if (!isValidPassword) {
+                return reply.status(401).send({ error: 'Invalid credentials' });
+            }
+
+            // Generate JWT token
+            const token = jwt.sign(
+                {
+                    sub: user.id,
+                    orgId: user.orgId,
+                    iat: Math.floor(Date.now() / 1000),
+                },
+                process.env.JWT_SECRET || 'your-secret-key',
+                { expiresIn: '24h' }
+            );
+
+            return reply.send({
+                success: true,
+                message: 'Login successful',
+                token,
+                user: {
+                    id: user.id,
+                    email: user.email,
+                    role: user.role,
+                },
+            });
+        } catch (error) {
+            if (error.statusCode) throw error;
+            fastify.log.error(error, 'Login failed');
+            throw fastify.httpErrors.internalServerError('Login failed');
+        }
+    });
+
     // Create API key
     fastify.post('/api-keys', {
         preHandler: [requireAuth, requireOrgAccess],

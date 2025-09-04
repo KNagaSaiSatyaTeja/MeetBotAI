@@ -1,12 +1,22 @@
 'use client'
 
 import { ReactNode } from 'react'
+import { useAuth } from '@/store/auth'
+import { useRouter } from 'next/navigation'
+import { useEffect } from 'react'
 
 interface AppLayoutProps {
   children: ReactNode
 }
 
 export function AppLayout({ children }: AppLayoutProps) {
+  const { user, logout } = useAuth()
+  const router = useRouter()
+  useEffect(() => {
+    if (!user) {
+      router.replace('/login')
+    }
+  }, [user, router])
   return (
     <div className="min-h-screen bg-background">
       {/* Sidebar */}
@@ -51,10 +61,11 @@ export function AppLayout({ children }: AppLayoutProps) {
             <div className="flex items-center space-x-3">
               <div className="h-8 w-8 bg-gray-300 rounded-full"></div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900 truncate">John Doe</p>
-                <p className="text-xs text-gray-500 truncate">admin@democorp.com</p>
+                <p className="text-sm font-medium text-gray-900 truncate">{user?.email || 'Guest'}</p>
+                <p className="text-xs text-gray-500 truncate">{user?.role || ''}</p>
               </div>
             </div>
+            <button onClick={logout} className="mt-3 text-xs text-blue-600">Sign out</button>
           </div>
         </div>
       </div>
