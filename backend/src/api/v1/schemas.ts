@@ -1,220 +1,359 @@
-import { z } from 'zod';
+// Fastify-compatible schemas (JSON Schema format)
+export const IdParamSchema = {
+    type: 'object',
+    properties: {
+        id: { type: 'string', pattern: '^c[a-z0-9]{24}$' }
+    },
+    required: ['id']
+};
 
-// Common schemas
-export const IdParamSchema = z.object({
-    id: z.string().cuid(),
-});
+export const PaginationQuerySchema = {
+    type: 'object',
+    properties: {
+        cursor: { type: 'string' },
+        limit: { type: 'number', minimum: 1, maximum: 100, default: 20 }
+    }
+};
 
-export const PaginationQuerySchema = z.object({
-    cursor: z.string().optional(),
-    limit: z.coerce.number().min(1).max(100).default(20),
-});
-
-export const SearchQuerySchema = z.object({
-    search: z.string().optional(),
-    platform: z.enum(['zoom', 'google-meet', 'teams']).optional(),
-    status: z.enum(['SCHEDULED', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'CANCELLED']).optional(),
-    dateFrom: z.string().datetime().optional(),
-    dateTo: z.string().datetime().optional(),
-}).merge(PaginationQuerySchema);
+export const SearchQuerySchema = {
+    type: 'object',
+    properties: {
+        search: { type: 'string' },
+        platform: { type: 'string', enum: ['zoom', 'google-meet', 'teams'] },
+        status: { type: 'string', enum: ['SCHEDULED', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'CANCELLED'] },
+        dateFrom: { type: 'string', format: 'date-time' },
+        dateTo: { type: 'string', format: 'date-time' },
+        cursor: { type: 'string' },
+        limit: { type: 'number', minimum: 1, maximum: 100, default: 20 }
+    }
+};
 
 // Meeting schemas
-export const CreateMeetingSchema = z.object({
-    title: z.string().min(1).max(255),
-    platform: z.enum(['zoom', 'google-meet', 'teams']),
-    meetingLink: z.string().url().optional(),
-    scheduledAt: z.string().datetime().optional(),
-    consentFlags: z.record(z.boolean()).optional(),
-});
+export const CreateMeetingSchema = {
+    type: 'object',
+    properties: {
+        title: { type: 'string', minLength: 1, maxLength: 255 },
+        platform: { type: 'string', enum: ['zoom', 'google-meet', 'teams'] },
+        meetingLink: { type: 'string', format: 'uri' },
+        scheduledAt: { type: 'string', format: 'date-time' },
+        consentFlags: { type: 'object', additionalProperties: { type: 'boolean' } }
+    },
+    required: ['title', 'platform']
+};
 
-export const MeetingQuerySchema = z.object({
-    record: z.coerce.boolean().default(false),
-    audio: z.coerce.boolean().default(false),
-    video: z.coerce.boolean().default(false),
-});
+export const MeetingQuerySchema = {
+    type: 'object',
+    properties: {
+        record: { type: 'boolean', default: false },
+        audio: { type: 'boolean', default: false },
+        video: { type: 'boolean', default: false }
+    }
+};
 
-export const UploadRecordingSchema = z.object({
-    hasVideo: z.coerce.boolean().default(false),
-    language: z.string().default('en'),
-});
+export const UploadRecordingSchema = {
+    type: 'object',
+    properties: {
+        hasVideo: { type: 'boolean', default: false },
+        language: { type: 'string', default: 'en' }
+    }
+};
 
 // Webhook schemas
-export const CreateWebhookSchema = z.object({
-    url: z.string().url(),
-    events: z.array(z.enum([
-        'meeting.created',
-        'meeting.started',
-        'meeting.completed',
-        'meeting.failed',
-        'recording.uploaded',
-        'transcript.ready',
-        'summary.ready',
-    ])),
-    active: z.boolean().default(true),
-});
+export const CreateWebhookSchema = {
+    type: 'object',
+    properties: {
+        url: { type: 'string', format: 'uri' },
+        events: {
+            type: 'array',
+            items: {
+                type: 'string',
+                enum: [
+                    'meeting.created',
+                    'meeting.started',
+                    'meeting.completed',
+                    'meeting.failed',
+                    'recording.uploaded',
+                    'transcript.ready',
+                    'summary.ready'
+                ]
+            }
+        },
+        active: { type: 'boolean', default: true }
+    },
+    required: ['url', 'events']
+};
 
-export const UpdateWebhookSchema = CreateWebhookSchema.partial();
+export const UpdateWebhookSchema = {
+    type: 'object',
+    properties: {
+        url: { type: 'string', format: 'uri' },
+        events: {
+            type: 'array',
+            items: {
+                type: 'string',
+                enum: [
+                    'meeting.created',
+                    'meeting.started',
+                    'meeting.completed',
+                    'meeting.failed',
+                    'recording.uploaded',
+                    'transcript.ready',
+                    'summary.ready'
+                ]
+            }
+        },
+        active: { type: 'boolean' }
+    }
+};
 
 // API Key schemas
-export const CreateApiKeySchema = z.object({
-    label: z.string().min(1).max(100),
-    scopes: z.array(z.enum([
-        'meetings:read',
-        'meetings:write',
-        'recordings:read',
-        'recordings:write',
-        'transcripts:read',
-        'summaries:read',
-        'webhooks:read',
-        'webhooks:write',
-    ])),
-});
+export const CreateApiKeySchema = {
+    type: 'object',
+    properties: {
+        label: { type: 'string', minLength: 1, maxLength: 100 },
+        scopes: {
+            type: 'array',
+            items: {
+                type: 'string',
+                enum: [
+                    'meetings:read',
+                    'meetings:write',
+                    'recordings:read',
+                    'recordings:write',
+                    'transcripts:read',
+                    'summaries:read',
+                    'webhooks:read',
+                    'webhooks:write'
+                ]
+            }
+        }
+    },
+    required: ['label', 'scopes']
+};
 
 // Response schemas
-export const ErrorResponseSchema = z.object({
-    error: z.string(),
-    message: z.string(),
-    statusCode: z.number(),
-    details: z.record(z.any()).optional(),
-});
+export const ErrorResponseSchema = {
+    type: 'object',
+    properties: {
+        error: { type: 'string' },
+        message: { type: 'string' },
+        statusCode: { type: 'number' },
+        details: { type: 'object', additionalProperties: true }
+    },
+    required: ['error', 'message', 'statusCode']
+};
 
-export const SuccessResponseSchema = z.object({
-    success: z.boolean(),
-    data: z.any().optional(),
-    message: z.string().optional(),
-});
+export const SuccessResponseSchema = {
+    type: 'object',
+    properties: {
+        success: { type: 'boolean' },
+        data: { type: 'object', additionalProperties: true },
+        message: { type: 'string' }
+    },
+    required: ['success']
+};
 
-export const PaginatedResponseSchema = z.object({
-    data: z.array(z.any()),
-    pagination: z.object({
-        cursor: z.string().nullable(),
-        hasMore: z.boolean(),
-        total: z.number().optional(),
-    }),
-});
+export const PaginatedResponseSchema = {
+    type: 'object',
+    properties: {
+        data: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        pagination: {
+            type: 'object',
+            properties: {
+                cursor: { type: ['string', 'null'] },
+                hasMore: { type: 'boolean' },
+                total: { type: 'number' }
+            },
+            required: ['cursor', 'hasMore']
+        }
+    },
+    required: ['data', 'pagination']
+};
 
 // Meeting response schemas
-export const MeetingResponseSchema = z.object({
-    id: z.string(),
-    orgId: z.string(),
-    title: z.string(),
-    platform: z.string(),
-    meetingLink: z.string().nullable(),
-    scheduledAt: z.string().datetime().nullable(),
-    startedAt: z.string().datetime().nullable(),
-    endedAt: z.string().datetime().nullable(),
-    status: z.enum(['SCHEDULED', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'CANCELLED']),
-    consentFlags: z.record(z.any()),
-    createdAt: z.string().datetime(),
-    updatedAt: z.string().datetime(),
-    recordings: z.array(z.object({
-        id: z.string(),
-        hasVideo: z.boolean(),
-        audioUrl: z.string().nullable(),
-        videoUrl: z.string().nullable(),
-        sizeBytes: z.string(), // BigInt as string
-        createdAt: z.string().datetime(),
-    })).optional(),
-    transcripts: z.array(z.object({
-        id: z.string(),
-        language: z.string(),
-        text: z.string(),
-        accuracy: z.number().nullable(),
-        readyAt: z.string().datetime().nullable(),
-        createdAt: z.string().datetime(),
-    })).optional(),
-    summaries: z.array(z.object({
-        id: z.string(),
-        model: z.string(),
-        summaryText: z.string(),
-        decisionsJson: z.array(z.any()),
-        actionItemsJson: z.array(z.any()),
-        participantsJson: z.array(z.any()),
-        readyAt: z.string().datetime().nullable(),
-        createdAt: z.string().datetime(),
-    })).optional(),
-});
+export const MeetingResponseSchema = {
+    type: 'object',
+    properties: {
+        id: { type: 'string' },
+        orgId: { type: 'string' },
+        title: { type: 'string' },
+        platform: { type: 'string' },
+        meetingLink: { type: ['string', 'null'] },
+        scheduledAt: { type: ['string', 'null'], format: 'date-time' },
+        startedAt: { type: ['string', 'null'], format: 'date-time' },
+        endedAt: { type: ['string', 'null'], format: 'date-time' },
+        status: { type: 'string', enum: ['SCHEDULED', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'CANCELLED'] },
+        consentFlags: { type: 'object', additionalProperties: true },
+        createdAt: { type: 'string', format: 'date-time' },
+        updatedAt: { type: 'string', format: 'date-time' },
+        recordings: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string' },
+                    hasVideo: { type: 'boolean' },
+                    audioUrl: { type: ['string', 'null'] },
+                    videoUrl: { type: ['string', 'null'] },
+                    sizeBytes: { type: 'string' },
+                    createdAt: { type: 'string', format: 'date-time' }
+                },
+                required: ['id', 'hasVideo', 'createdAt']
+            }
+        },
+        transcripts: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string' },
+                    language: { type: 'string' },
+                    text: { type: 'string' },
+                    accuracy: { type: ['number', 'null'] },
+                    readyAt: { type: ['string', 'null'], format: 'date-time' },
+                    createdAt: { type: 'string', format: 'date-time' }
+                },
+                required: ['id', 'language', 'text', 'createdAt']
+            }
+        },
+        summaries: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string' },
+                    model: { type: 'string' },
+                    summaryText: { type: 'string' },
+                    decisionsJson: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                    actionItemsJson: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                    participantsJson: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                    readyAt: { type: ['string', 'null'], format: 'date-time' },
+                    createdAt: { type: 'string', format: 'date-time' }
+                },
+                required: ['id', 'model', 'summaryText', 'createdAt']
+            }
+        }
+    },
+    required: ['id', 'orgId', 'title', 'platform', 'status', 'createdAt', 'updatedAt']
+};
 
-export const TranscriptResponseSchema = z.object({
-    id: z.string(),
-    meetingId: z.string(),
-    language: z.string(),
-    text: z.string(),
-    words: z.array(z.object({
-        word: z.string(),
-        start: z.number(),
-        end: z.number(),
-        confidence: z.number().optional(),
-    })),
-    speakerTurns: z.array(z.object({
-        speaker: z.string(),
-        start: z.number(),
-        end: z.number(),
-        text: z.string(),
-    })),
-    accuracy: z.number().nullable(),
-    readyAt: z.string().datetime().nullable(),
-    createdAt: z.string().datetime(),
-});
+export const TranscriptResponseSchema = {
+    type: 'object',
+    properties: {
+        id: { type: 'string' },
+        meetingId: { type: 'string' },
+        language: { type: 'string' },
+        text: { type: 'string' },
+        words: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    word: { type: 'string' },
+                    start: { type: 'number' },
+                    end: { type: 'number' },
+                    confidence: { type: 'number' }
+                },
+                required: ['word', 'start', 'end']
+            }
+        },
+        speakerTurns: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    speaker: { type: 'string' },
+                    start: { type: 'number' },
+                    end: { type: 'number' },
+                    text: { type: 'string' }
+                },
+                required: ['speaker', 'start', 'end', 'text']
+            }
+        },
+        accuracy: { type: ['number', 'null'] },
+        readyAt: { type: ['string', 'null'], format: 'date-time' },
+        createdAt: { type: 'string', format: 'date-time' }
+    },
+    required: ['id', 'meetingId', 'language', 'text', 'createdAt']
+};
 
-export const SummaryResponseSchema = z.object({
-    id: z.string(),
-    meetingId: z.string(),
-    model: z.string(),
-    summaryText: z.string(),
-    decisions: z.array(z.object({
-        decision: z.string(),
-        owner: z.string().optional(),
-        dueDate: z.string().datetime().optional(),
-    })),
-    actionItems: z.array(z.object({
-        task: z.string(),
-        owner: z.string().optional(),
-        dueDate: z.string().datetime().optional(),
-        priority: z.enum(['low', 'medium', 'high']).optional(),
-    })),
-    participants: z.array(z.object({
-        name: z.string(),
-        email: z.string().optional(),
-        role: z.string().optional(),
-        speakingTime: z.number().optional(),
-    })),
-    readyAt: z.string().datetime().nullable(),
-    createdAt: z.string().datetime(),
-});
+export const SummaryResponseSchema = {
+    type: 'object',
+    properties: {
+        id: { type: 'string' },
+        meetingId: { type: 'string' },
+        model: { type: 'string' },
+        summaryText: { type: 'string' },
+        decisions: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    decision: { type: 'string' },
+                    owner: { type: 'string' },
+                    dueDate: { type: 'string', format: 'date-time' }
+                },
+                required: ['decision']
+            }
+        },
+        actionItems: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    task: { type: 'string' },
+                    owner: { type: 'string' },
+                    dueDate: { type: 'string', format: 'date-time' },
+                    priority: { type: 'string', enum: ['low', 'medium', 'high'] }
+                },
+                required: ['task']
+            }
+        },
+        participants: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    name: { type: 'string' },
+                    email: { type: 'string' },
+                    role: { type: 'string' },
+                    speakingTime: { type: 'number' }
+                },
+                required: ['name']
+            }
+        },
+        readyAt: { type: ['string', 'null'], format: 'date-time' },
+        createdAt: { type: 'string', format: 'date-time' }
+    },
+    required: ['id', 'meetingId', 'model', 'summaryText', 'createdAt']
+};
 
 // Webhook response schemas
-export const WebhookResponseSchema = z.object({
-    id: z.string(),
-    orgId: z.string(),
-    url: z.string(),
-    events: z.array(z.string()),
-    active: z.boolean(),
-    createdAt: z.string().datetime(),
-    updatedAt: z.string().datetime(),
-    deliveries: z.array(z.object({
-        id: z.string(),
-        event: z.string(),
-        status: z.enum(['PENDING', 'DELIVERED', 'FAILED', 'CANCELLED']),
-        attempts: z.number(),
-        responseCode: z.number().nullable(),
-        createdAt: z.string().datetime(),
-    })).optional(),
-});
-
-// Export type definitions
-export type CreateMeetingInput = z.infer<typeof CreateMeetingSchema>;
-export type MeetingQuery = z.infer<typeof MeetingQuerySchema>;
-export type UploadRecordingInput = z.infer<typeof UploadRecordingSchema>;
-export type CreateWebhookInput = z.infer<typeof CreateWebhookSchema>;
-export type UpdateWebhookInput = z.infer<typeof UpdateWebhookSchema>;
-export type CreateApiKeyInput = z.infer<typeof CreateApiKeySchema>;
-export type SearchQuery = z.infer<typeof SearchQuerySchema>;
-export type PaginationQuery = z.infer<typeof PaginationQuerySchema>;
-export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
-export type SuccessResponse = z.infer<typeof SuccessResponseSchema>;
-export type PaginatedResponse = z.infer<typeof PaginatedResponseSchema>;
-export type MeetingResponse = z.infer<typeof MeetingResponseSchema>;
-export type TranscriptResponse = z.infer<typeof TranscriptResponseSchema>;
-export type SummaryResponse = z.infer<typeof SummaryResponseSchema>;
-export type WebhookResponse = z.infer<typeof WebhookResponseSchema>;
+export const WebhookResponseSchema = {
+    type: 'object',
+    properties: {
+        id: { type: 'string' },
+        orgId: { type: 'string' },
+        url: { type: 'string' },
+        events: { type: 'array', items: { type: 'string' } },
+        active: { type: 'boolean' },
+        createdAt: { type: 'string', format: 'date-time' },
+        updatedAt: { type: 'string', format: 'date-time' },
+        deliveries: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string' },
+                    event: { type: 'string' },
+                    status: { type: 'string', enum: ['PENDING', 'DELIVERED', 'FAILED', 'CANCELLED'] },
+                    attempts: { type: 'number' },
+                    responseCode: { type: ['number', 'null'] },
+                    createdAt: { type: 'string', format: 'date-time' }
+                },
+                required: ['id', 'event', 'status', 'attempts', 'createdAt']
+            }
+        }
+    },
+    required: ['id', 'orgId', 'url', 'events', 'active', 'createdAt', 'updatedAt']
+};

@@ -1,0 +1,33 @@
+{
+  "name": "@ai-meeting-bot/scripts",
+  "version": "1.0.0",
+  "description": "Database seeding and utility scripts for AI Meeting Bot",
+  "private": true,
+  "scripts": {
+    "seed": "tsx seed/seed.ts",
+    "seed:demo": "tsx seed/demo-data.ts",
+    "clean": "tsx seed/clean.ts",
+    "migrate": "tsx seed/migrate.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "@prisma/client": "^5.7.1",
+    "bcryptjs": "^2.4.3",
+    "faker": "^6.6.6",
+    "tsx": "^4.6.2"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20.10.6",
+    "@typescript-eslint/eslint-plugin": "^6.17.0",
+    "@typescript-eslint/parser": "^6.17.0",
+    "eslint": "^8.56.0",
+    "prettier": "^3.1.1",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

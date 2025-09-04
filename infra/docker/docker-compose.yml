@@ -1,0 +1,217 @@
+version: '3.8'
+
+services:
+  # Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: aimeet-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aimeet
+      POSTGRES_USER: aimeet
+      POSTGRES_PASSWORD: aimeet_dev_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aimeet -d aimeet"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aimeet-network
+
+  # Redis for job queue and caching
+  redis:
+    image: redis:7-alpine
+    container_name: aimeet-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass redis_dev_password
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aimeet-network
+
+  # MinIO for S3-compatible storage
+  minio:
+    image: minio/minio:latest
+    container_name: aimeet-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_DEFAULT_BUCKETS: ai-meeting-bot
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - aimeet-network
+
+  # Backend API
+  api:
+    build:
+      context: ../../backend
+      dockerfile: ../infra/docker/api.Dockerfile
+    container_name: aimeet-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://aimeet:aimeet_dev_password@postgres:5432/aimeet
+      REDIS_URL: redis://:redis_dev_password@redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: ai-meeting-bot
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin123
+      STT_PROVIDER: whisper
+      LLM_PROVIDER: openai
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-fake-key}
+      API_RATE_LIMIT: 60
+      RETENTION_DAYS: 30
+      REGION: us
+      JWT_SECRET: development-jwt-secret-change-in-production
+      CORS_ORIGINS: http://localhost:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ../../backend:/app
+      - /app/node_modules
+    networks:
+      - aimeet-network
+
+  # Worker for job processing
+  worker:
+    build:
+      context: ../../worker
+      dockerfile: ../infra/docker/worker.Dockerfile
+    container_name: aimeet-worker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://aimeet:aimeet_dev_password@postgres:5432/aimeet
+      REDIS_URL: redis://:redis_dev_password@redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: ai-meeting-bot
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin123
+      STT_PROVIDER: whisper
+      LLM_PROVIDER: openai
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-fake-key}
+      REGION: us
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ../../worker:/app
+      - /app/node_modules
+    networks:
+      - aimeet-network
+
+  # Frontend web app
+  web:
+    build:
+      context: ../../frontend
+      dockerfile: ../infra/docker/web.Dockerfile
+    container_name: aimeet-web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: http://localhost:3000
+      NEXT_PUBLIC_APP_URL: http://localhost:3001
+      NEXTAUTH_URL: http://localhost:3001
+      NEXTAUTH_SECRET: development-nextauth-secret-change-in-production
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET}
+    ports:
+      - "3001:3000"
+    depends_on:
+      - api
+    volumes:
+      - ../../frontend:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - aimeet-network
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aimeet-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - aimeet-network
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aimeet-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    ports:
+      - "3003:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - aimeet-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  aimeet-network:
+    driver: bridge

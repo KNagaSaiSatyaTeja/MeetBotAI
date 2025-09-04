@@ -8,15 +8,19 @@ export interface OpenAIConfig {
 }
 
 export class OpenAIAdapter implements LLMAdapter {
-    private openai: OpenAI;
+    private openai?: OpenAI;
     private model: string;
 
     constructor(config: OpenAIConfig) {
         this.model = config.model;
-        this.openai = new OpenAI({
-            apiKey: config.apiKey,
-            baseURL: config.baseURL,
-        });
+        
+        // Only initialize OpenAI client if API key is provided
+        if (config.apiKey && config.apiKey !== 'sk-fake-key') {
+            this.openai = new OpenAI({
+                apiKey: config.apiKey,
+                baseURL: config.baseURL,
+            });
+        }
     }
 
     getName(): string {
@@ -34,6 +38,11 @@ export class OpenAIAdapter implements LLMAdapter {
     }
 
     async summarize(transcript: string, schema?: any): Promise<SummaryResult> {
+        // If no OpenAI client, return stub result
+        if (!this.openai) {
+            return this.getStubResult(transcript);
+        }
+
         try {
             const prompt = this.buildPrompt(transcript);
 

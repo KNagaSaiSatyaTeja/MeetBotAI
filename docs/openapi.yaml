@@ -1,0 +1,709 @@
+openapi: 3.0.0
+info:
+  title: AI Meeting Bot API
+  description: REST API for AI Meeting Bot - Transcription and Summarization
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@meetbot.ai
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:3000
+    description: Development server
+  - url: https://api.meetbot.ai
+    description: Production server
+
+security:
+  - ApiKeyAuth: []
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Check if the API is running and healthy
+      tags:
+        - Health
+      security: []
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  timestamp:
+                    type: string
+                    format: date-time
+                  services:
+                    type: object
+                    properties:
+                      database:
+                        type: string
+                        example: connected
+                      redis:
+                        type: string
+                        example: connected
+
+  /v1/meetings:
+    get:
+      summary: List meetings
+      description: Retrieve a paginated list of meetings with optional filtering
+      tags:
+        - Meetings
+      parameters:
+        - name: search
+          in: query
+          description: Search term for meeting title or link
+          schema:
+            type: string
+        - name: platform
+          in: query
+          description: Meeting platform filter
+          schema:
+            type: string
+            enum: [zoom, google-meet, teams]
+        - name: status
+          in: query
+          description: Meeting status filter
+          schema:
+            type: string
+            enum: [SCHEDULED, IN_PROGRESS, COMPLETED, FAILED, CANCELLED]
+        - name: dateFrom
+          in: query
+          description: Filter meetings from this date
+          schema:
+            type: string
+            format: date-time
+        - name: dateTo
+          in: query
+          description: Filter meetings until this date
+          schema:
+            type: string
+            format: date-time
+        - name: cursor
+          in: query
+          description: Pagination cursor
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Number of results per page (1-100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: List of meetings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedMeetings'
+
+    post:
+      summary: Create meeting
+      description: Create a new meeting record
+      tags:
+        - Meetings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMeetingRequest'
+      responses:
+        '201':
+          description: Meeting created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Meeting'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/meetings/{id}:
+    get:
+      summary: Get meeting details
+      description: Retrieve detailed information about a specific meeting
+      tags:
+        - Meetings
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Meeting ID
+          schema:
+            type: string
+        - name: record
+          in: query
+          description: Include recording information
+          schema:
+            type: boolean
+            default: false
+        - name: audio
+          in: query
+          description: Include signed audio URL
+          schema:
+            type: boolean
+            default: false
+        - name: video
+          in: query
+          description: Include signed video URL
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Meeting details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeetingDetails'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/meetings/{id}/recording:
+    post:
+      summary: Upload recording
+      description: Upload audio or video recording for a meeting
+      tags:
+        - Meetings
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Meeting ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Audio or video file
+                language:
+                  type: string
+                  default: en
+                  description: Language code for transcription
+      responses:
+        '200':
+          description: Recording uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  recordingId:
+                    type: string
+                  message:
+                    type: string
+        '413':
+          description: File too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/meetings/{id}/transcript:
+    get:
+      summary: Get transcript
+      description: Retrieve the transcript for a meeting
+      tags:
+        - Meetings
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Meeting ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Meeting transcript
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transcript'
+
+  /v1/meetings/{id}/summary:
+    get:
+      summary: Get summary
+      description: Retrieve the AI-generated summary for a meeting
+      tags:
+        - Meetings
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Meeting ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Meeting summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Summary'
+
+  /v1/webhooks:
+    get:
+      summary: List webhooks
+      description: Get all webhooks for the organization
+      tags:
+        - Webhooks
+      responses:
+        '200':
+          description: List of webhooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Webhook'
+
+    post:
+      summary: Create webhook
+      description: Create a new webhook endpoint
+      tags:
+        - Webhooks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebhookRequest'
+      responses:
+        '201':
+          description: Webhook created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: API key for programmatic access
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token for web application
+
+  schemas:
+    Error:
+      type: object
+      required:
+        - error
+        - message
+        - statusCode
+      properties:
+        error:
+          type: string
+          description: Error type
+        message:
+          type: string
+          description: Human-readable error message
+        statusCode:
+          type: integer
+          description: HTTP status code
+        details:
+          type: object
+          description: Additional error details
+
+    CreateMeetingRequest:
+      type: object
+      required:
+        - title
+        - platform
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Meeting title
+        platform:
+          type: string
+          enum: [zoom, google-meet, teams]
+          description: Meeting platform
+        meetingLink:
+          type: string
+          format: uri
+          description: Meeting URL
+        scheduledAt:
+          type: string
+          format: date-time
+          description: Scheduled meeting time
+        consentFlags:
+          type: object
+          description: Consent settings
+
+    Meeting:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique meeting ID
+        orgId:
+          type: string
+          description: Organization ID
+        title:
+          type: string
+          description: Meeting title
+        platform:
+          type: string
+          enum: [zoom, google-meet, teams]
+        meetingLink:
+          type: string
+          format: uri
+          nullable: true
+        scheduledAt:
+          type: string
+          format: date-time
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        endedAt:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum: [SCHEDULED, IN_PROGRESS, COMPLETED, FAILED, CANCELLED]
+        consentFlags:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    MeetingDetails:
+      allOf:
+        - $ref: '#/components/schemas/Meeting'
+        - type: object
+          properties:
+            recordings:
+              type: array
+              items:
+                $ref: '#/components/schemas/Recording'
+            transcripts:
+              type: array
+              items:
+                $ref: '#/components/schemas/Transcript'
+            summaries:
+              type: array
+              items:
+                $ref: '#/components/schemas/Summary'
+
+    Recording:
+      type: object
+      properties:
+        id:
+          type: string
+        hasVideo:
+          type: boolean
+        audioUrl:
+          type: string
+          format: uri
+          nullable: true
+        videoUrl:
+          type: string
+          format: uri
+          nullable: true
+        sizeBytes:
+          type: string
+          description: File size in bytes (as string for large numbers)
+        createdAt:
+          type: string
+          format: date-time
+
+    Transcript:
+      type: object
+      properties:
+        id:
+          type: string
+        meetingId:
+          type: string
+        language:
+          type: string
+        text:
+          type: string
+          description: Full transcript text
+        words:
+          type: array
+          items:
+            type: object
+            properties:
+              word:
+                type: string
+              start:
+                type: number
+                description: Start time in seconds
+              end:
+                type: number
+                description: End time in seconds
+              confidence:
+                type: number
+                minimum: 0
+                maximum: 1
+        speakerTurns:
+          type: array
+          items:
+            type: object
+            properties:
+              speaker:
+                type: string
+              start:
+                type: number
+              end:
+                type: number
+              text:
+                type: string
+        accuracy:
+          type: number
+          minimum: 0
+          maximum: 1
+          nullable: true
+        readyAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    Summary:
+      type: object
+      properties:
+        id:
+          type: string
+        meetingId:
+          type: string
+        model:
+          type: string
+          description: AI model used for summarization
+        summaryText:
+          type: string
+          description: Main summary text
+        decisions:
+          type: array
+          items:
+            type: object
+            properties:
+              decision:
+                type: string
+              owner:
+                type: string
+              dueDate:
+                type: string
+                format: date-time
+        actionItems:
+          type: array
+          items:
+            type: object
+            properties:
+              task:
+                type: string
+              owner:
+                type: string
+              dueDate:
+                type: string
+                format: date-time
+              priority:
+                type: string
+                enum: [low, medium, high]
+        participants:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              email:
+                type: string
+                format: email
+              role:
+                type: string
+              speakingTime:
+                type: number
+                description: Speaking time in seconds
+        readyAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateWebhookRequest:
+      type: object
+      required:
+        - url
+        - events
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Webhook endpoint URL
+        events:
+          type: array
+          items:
+            type: string
+            enum:
+              - meeting.created
+              - meeting.started
+              - meeting.completed
+              - meeting.failed
+              - recording.uploaded
+              - transcript.ready
+              - summary.ready
+          description: Events to subscribe to
+        active:
+          type: boolean
+          default: true
+          description: Whether webhook is active
+
+    Webhook:
+      type: object
+      properties:
+        id:
+          type: string
+        orgId:
+          type: string
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+        active:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        deliveries:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              event:
+                type: string
+              status:
+                type: string
+                enum: [PENDING, DELIVERED, FAILED, CANCELLED]
+              attempts:
+                type: integer
+              responseCode:
+                type: integer
+                nullable: true
+              createdAt:
+                type: string
+                format: date-time
+
+    PaginatedMeetings:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Meeting'
+        pagination:
+          type: object
+          properties:
+            cursor:
+              type: string
+              nullable: true
+              description: Cursor for next page
+            hasMore:
+              type: boolean
+              description: Whether there are more results
+            total:
+              type: integer
+              description: Total count (only on first page)
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Validation Error"
+            message: "Invalid input parameters"
+            statusCode: 400
+
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Unauthorized"
+            message: "Authentication required"
+            statusCode: 401
+
+    Forbidden:
+      description: Access denied
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Forbidden"
+            message: "Access denied to organization"
+            statusCode: 403
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Not Found"
+            message: "Meeting not found"
+            statusCode: 404
+
+tags:
+  - name: Health
+    description: Health check endpoints
+  - name: Meetings
+    description: Meeting management and processing
+  - name: Webhooks
+    description: Webhook configuration and management

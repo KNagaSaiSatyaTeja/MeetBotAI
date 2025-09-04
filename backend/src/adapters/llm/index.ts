@@ -61,7 +61,7 @@ function createLLMAdapter(): LLMAdapter {
         case 'openai':
         default:
             return new OpenAIAdapter({
-                apiKey: process.env.OPENAI_API_KEY!,
+                apiKey: process.env.OPENAI_API_KEY || 'sk-fake-key',
                 model: process.env.OPENAI_MODEL || 'gpt-4',
             });
     }

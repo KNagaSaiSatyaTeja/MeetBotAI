@@ -16,9 +16,12 @@ import { searchRoutes } from './api/v1/search';
 
 // Job Queue
 import { setupQueue } from './jobs/queue';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 // Environment
-const PORT = parseInt(process.env.PORT || '3000', 10);
+const PORT = parseInt(process.env.PORT, 10);
 const HOST = process.env.HOST || '0.0.0.0';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
@@ -47,9 +50,9 @@ async function buildApp() {
         log: NODE_ENV === 'development' ? ['query', 'info', 'warn', 'error'] : ['warn', 'error'],
     });
 
-    const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+    const redis = new Redis(process.env.REDIS_URL , {
         retryDelayOnFailover: 100,
-        maxRetriesPerRequest: 3,
+        maxRetriesPerRequest: null, // Fixed for BullMQ compatibility
         lazyConnect: true,
     });
 
@@ -79,7 +82,7 @@ async function buildApp() {
     });
 
     await app.register(require('@fastify/rate-limit'), {
-        max: parseInt(process.env.API_RATE_LIMIT || '60', 10),
+        max: parseInt(process.env.API_RATE_LIMIT , 10),
         timeWindow: '1 minute',
         keyGenerator: (req) => {
             const apiKey = req.headers['x-api-key'] as string;
@@ -104,7 +107,7 @@ async function buildApp() {
             },
             servers: [
                 {
-                    url: 'http://localhost:3000',
+                    url: `http://localhost:${PORT}`,
                     description: 'Development server',
                 },
             ],
@@ -142,24 +145,7 @@ async function buildApp() {
     await app.register(authMiddleware);
     await app.register(rbacMiddleware);
 
-    // Health check
-    app.get('/health', async () => {
-        try {
-            await prisma.$queryRaw`SELECT 1`;
-            await redis.ping();
-            return {
-                status: 'healthy',
-                timestamp: new Date().toISOString(),
-                services: {
-                    database: 'connected',
-                    redis: 'connected',
-                },
-            };
-        } catch (error) {
-            app.log.error(error, 'Health check failed');
-            throw app.httpErrors.serviceUnavailable('Service unhealthy');
-        }
-    });
+    // Health check is handled by observability middleware
 
     // API Routes
     await app.register(meetingsRoutes, { prefix: '/v1' });

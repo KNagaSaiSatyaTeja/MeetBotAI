@@ -28,7 +28,7 @@ export async function meetingsRoutes(fastify: FastifyInstance) {
             summary: 'Create a new meeting',
             description: 'Creates a new meeting record for the organization',
         },
-    }, async (request: FastifyRequest<{ Body: typeof CreateMeetingSchema._type }>, reply: FastifyReply) => {
+    }, async (request: FastifyRequest<{ Body: any }>, reply: FastifyReply) => {
         const { orgId } = request.user;
         const meetingData = request.body;
 
@@ -85,7 +85,7 @@ export async function meetingsRoutes(fastify: FastifyInstance) {
         },
     }, async (request: FastifyRequest<{
         Params: { id: string },
-        Querystring: typeof MeetingQuerySchema._type
+        Querystring: any
     }>, reply: FastifyReply) => {
         const { id } = request.params;
         const { record, audio, video } = request.query;
