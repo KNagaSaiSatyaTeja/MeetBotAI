@@ -1,10 +1,18 @@
 import { PrismaClient } from '@prisma/client';
 import { EventEmitter } from 'events';
+import { detectPlatform, MeetingPlatform } from '../utils/platform';
+import { ZoomAdapter } from './bot-adapters/zoom';
+import { RecordingService } from './recordingService';
+import { storageAdapter } from '../adapters/storage';
+import path from 'path';
+import fs from 'fs/promises';
 
-interface MeetingBotConfig {
+export interface MeetingBotConfig {
     meetingLink: string;
     orgId: string;
     title?: string;
+    displayName?: string;
+    passcode?: string;
     consentFlags?: {
         recording?: boolean;
         transcription?: boolean;
@@ -12,46 +20,49 @@ interface MeetingBotConfig {
     };
 }
 
-interface MeetingBotEvents {
+export interface MeetingBotEvents {
     'meeting.joined': (meetingId: string) => void;
     'meeting.started': (meetingId: string) => void;
     'meeting.ended': (meetingId: string) => void;
-    'audio.received': (meetingId: string, audioData: Buffer) => void;
-    'transcript.generated': (meetingId: string, transcript: string) => void;
+    'recording.started': (meetingId: string) => void;
+    'recording.stopped': (meetingId: string, filePath: string) => void;
     'error': (error: Error) => void;
 }
 
 export class MeetingBot extends EventEmitter {
     private prisma: PrismaClient;
     private meetingId: string | null = null;
-    private isRecording = false;
-    private audioChunks: Buffer[] = [];
-    private transcriptBuffer: string[] = [];
+    private botRowId: string | null = null;
+    private platform: MeetingPlatform = 'unknown';
+    private adapter: any = null;
+    private recordingService: RecordingService;
+    private isActive = false;
 
     constructor(prisma: PrismaClient) {
         super();
         this.prisma = prisma;
+        this.recordingService = new RecordingService();
     }
 
     async joinMeeting(config: MeetingBotConfig): Promise<string> {
         try {
-            console.log(`🤖 MeetBot joining meeting: ${config.meetingLink}`);
-            
-            // Extract meeting ID from Google Meet link
-            const meetingCode = this.extractMeetingCode(config.meetingLink);
-            if (!meetingCode) {
-                throw new Error('Invalid Google Meet link format');
+            console.log(`🤖 MeetingBot joining: ${config.meetingLink}`);
+
+            const detected = detectPlatform(config.meetingLink);
+            this.platform = detected.platform;
+
+            if (detected.platform === 'unknown') {
+                throw new Error('Unsupported meeting platform');
             }
 
-            // Create meeting record in database
+            // Create meeting record
             const meeting = await this.prisma.meeting.create({
                 data: {
                     orgId: config.orgId,
-                    title: config.title || `Meeting ${meetingCode}`,
-                    platform: 'google-meet',
+                    title: config.title || `Meeting ${detected.meetingId || 'Auto'}`,
+                    platform: detected.platform,
                     meetingLink: config.meetingLink,
                     scheduledAt: new Date(),
-                    startedAt: new Date(),
                     status: 'IN_PROGRESS',
                     consentFlags: config.consentFlags || {
                         recording: true,
@@ -62,101 +73,126 @@ export class MeetingBot extends EventEmitter {
             });
 
             this.meetingId = meeting.id;
-            console.log(`✅ Meeting created in database: ${meeting.id}`);
 
-            // Simulate bot joining the meeting
-            await this.simulateBotJoin(meetingCode);
-            
+            // Create bot tracking record
+            const botRow = await this.prisma.meetingsBot.create({
+                data: {
+                    meetingId: meeting.id,
+                    platform: detected.platform,
+                    status: 'JOINING',
+                    joinLink: config.meetingLink,
+                    startedAt: new Date(),
+                    metaJson: {
+                        platform: detected.platform,
+                        meetingId: detected.meetingId,
+                        displayName: config.displayName || process.env.BOT_DISPLAY_NAME || 'MeetingBot AI'
+                    }
+                }
+            });
+
+            this.botRowId = botRow.id;
+            await this.logBot('INFO', 'bot.joining', 'Bot joining meeting');
+
+            // Initialize platform adapter
+            await this.initializeAdapter(config, detected);
+
+            // Start the join process
+            await this.performJoin(config, detected);
+
+            this.isActive = true;
             this.emit('meeting.joined', meeting.id);
-            this.emit('meeting.started', meeting.id);
 
             return meeting.id;
+
         } catch (error) {
             console.error('❌ Failed to join meeting:', error);
+            await this.updateBotStatus('FAILED');
             this.emit('error', error as Error);
             throw error;
         }
     }
 
-    private extractMeetingCode(meetingLink: string): string | null {
-        // Extract meeting code from Google Meet URL
-        // Format: https://meet.google.com/abc-defg-hij
-        const match = meetingLink.match(/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3})/);
-        return match ? match[1] : null;
+    private async initializeAdapter(config: MeetingBotConfig, detected: any) {
+        switch (this.platform) {
+            case 'zoom':
+                this.adapter = new ZoomAdapter();
+                this.setupAdapterEvents();
+                break;
+            default:
+                throw new Error(`Platform ${this.platform} not yet implemented`);
+        }
     }
 
-    private async simulateBotJoin(meetingCode: string): Promise<void> {
-        console.log(`🔗 Connecting to Google Meet room: ${meetingCode}`);
-        
-        // In a real implementation, this would:
-        // 1. Use puppeteer/playwright to open Chrome
-        // 2. Navigate to the meeting link
-        // 3. Handle permissions for microphone/camera
-        // 4. Join as "MeetBot AI"
-        // 5. Start capturing audio/video streams
-        
-        // Simulate connection delay
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        console.log(`✅ Bot successfully joined meeting: ${meetingCode}`);
-        
-        // Start recording simulation
-        this.startRecording();
-        
-        // Simulate meeting duration (for demo, we'll run for 30 seconds)
-        setTimeout(() => {
-            this.endMeeting();
-        }, 30000);
+    private setupAdapterEvents() {
+        if (!this.adapter) return;
+
+        this.adapter.on('joined', async () => {
+            await this.updateBotStatus('IN_MEETING');
+            await this.startRecording();
+            this.emit('meeting.started', this.meetingId!);
+        });
+
+        this.adapter.on('left', async () => {
+            await this.endMeeting();
+        });
+
+        this.adapter.on('error', (error: Error) => {
+            this.emit('error', error);
+        });
     }
 
-    private startRecording(): void {
+    private async performJoin(config: MeetingBotConfig, detected: any) {
+        const joinConfig = {
+            meetingLink: config.meetingLink,
+            displayName: config.displayName || process.env.BOT_DISPLAY_NAME || 'MeetingBot AI',
+            audio: false, // Bot joins muted
+            video: false, // Bot joins with video off
+            password: config.passcode || detected.password
+        };
+
+        await this.adapter.join(joinConfig);
+    }
+
+    private async startRecording() {
         if (!this.meetingId) return;
-        
-        this.isRecording = true;
-        console.log('🎙️ Started recording audio...');
-        
-        // Simulate audio capture every 5 seconds
-        const audioInterval = setInterval(() => {
-            if (!this.isRecording) {
-                clearInterval(audioInterval);
-                return;
-            }
-            
-            // Simulate receiving audio data
-            const audioChunk = Buffer.from(`audio-data-${Date.now()}`);
-            this.audioChunks.push(audioChunk);
-            this.emit('audio.received', this.meetingId!, audioChunk);
-            
-            // Simulate transcript generation
-            const transcript = this.generateMockTranscript();
-            this.transcriptBuffer.push(transcript);
-            this.emit('transcript.generated', this.meetingId!, transcript);
-            
-        }, 5000);
-    }
 
-    private generateMockTranscript(): string {
-        const mockPhrases = [
-            "Welcome everyone to today's meeting.",
-            "Let's start by reviewing the agenda.",
-            "The first item on our list is project updates.",
-            "Can everyone hear me clearly?",
-            "Let's move on to the next topic.",
-            "Are there any questions so far?",
-            "I think we're making good progress.",
-            "Let's wrap up with action items."
-        ];
-        
-        return mockPhrases[Math.floor(Math.random() * mockPhrases.length)];
+        try {
+            await this.updateBotStatus('RECORDING');
+
+            const outputDir = process.env.RECORDINGS_DIR || '/tmp/recordings';
+            await fs.mkdir(outputDir, { recursive: true });
+
+            const filePath = path.join(outputDir, `${this.meetingId}.wav`);
+
+            await this.recordingService.startRecording(filePath, {
+                device: process.env.FFMPEG_AUDIO_DEVICE || 'default'
+            });
+
+            await this.logBot('INFO', 'recording.started', 'Recording started');
+            this.emit('recording.started', this.meetingId);
+
+        } catch (error) {
+            console.error('Failed to start recording:', error);
+            await this.logBot('ERROR', 'recording.failed', 'Recording failed to start', { error: (error as Error).message });
+        }
     }
 
     async endMeeting(): Promise<void> {
-        if (!this.meetingId) return;
-        
+        if (!this.meetingId || !this.isActive) return;
+
         try {
-            console.log('🛑 Ending meeting and saving data...');
-            this.isRecording = false;
-            
+            console.log('🛑 Ending meeting and processing data...');
+            this.isActive = false;
+
+            await this.updateBotStatus('LEAVING');
+
+            // Stop recording
+            const recordingPath = await this.recordingService.stopRecording();
+            if (recordingPath) {
+                this.emit('recording.stopped', this.meetingId, recordingPath);
+                await this.processRecording(recordingPath);
+            }
+
             // Update meeting status
             await this.prisma.meeting.update({
                 where: { id: this.meetingId },
@@ -166,143 +202,103 @@ export class MeetingBot extends EventEmitter {
                 }
             });
 
-            // Save recording data
-            if (this.audioChunks.length > 0) {
-                await this.saveRecording();
-            }
+            await this.updateBotStatus('ENDED');
+            await this.logBot('INFO', 'meeting.ended', 'Meeting ended successfully');
 
-            // Save transcript
-            if (this.transcriptBuffer.length > 0) {
-                await this.saveTranscript();
-            }
-
-            // Generate summary
-            await this.generateSummary();
-
-            console.log('✅ Meeting data saved successfully');
             this.emit('meeting.ended', this.meetingId);
-            
+
         } catch (error) {
             console.error('❌ Failed to end meeting:', error);
+            await this.updateBotStatus('FAILED');
             this.emit('error', error as Error);
         }
     }
 
-    private async saveRecording(): Promise<void> {
+    private async processRecording(filePath: string) {
         if (!this.meetingId) return;
-        
-        // Simulate saving audio recording
-        const totalSize = this.audioChunks.reduce((sum, chunk) => sum + chunk.length, 0);
-        
-        await this.prisma.recording.create({
-            data: {
-                meetingId: this.meetingId,
-                hasVideo: false,
-                audioUrl: `s3://meetbot-recordings/${this.meetingId}/audio.wav`,
-                sizeBytes: BigInt(totalSize),
-                checksum: `sha256-${Date.now()}`,
-                storageRegion: 'us',
-                encryptionMeta: {}
+
+        try {
+            // Upload recording to storage
+            const fileBuffer = await fs.readFile(filePath);
+            const storageKey = `recordings/${this.meetingId}/audio.wav`;
+
+            const uploadResult = await storageAdapter.uploadFile(
+                storageKey,
+                fileBuffer,
+                'audio/wav'
+            );
+
+            // Create recording record
+            const recording = await this.prisma.recording.create({
+                data: {
+                    meetingId: this.meetingId,
+                    hasVideo: false,
+                    audioUrl: uploadResult.url,
+                    sizeBytes: BigInt(fileBuffer.length),
+                    checksum: uploadResult.checksum,
+                    storageRegion: process.env.S3_REGION || 'us-east-1',
+                    encryptionMeta: uploadResult.encryptionMeta || {}
+                }
+            });
+
+            // Clean up local file
+            await fs.unlink(filePath).catch(() => { });
+
+            // Enqueue transcription job
+            const { transcribeQueue } = (global as any).__jobQueue || {};
+            if (transcribeQueue) {
+                await transcribeQueue.add('transcribe', {
+                    recordingId: recording.id,
+                    meetingId: this.meetingId,
+                    orgId: (await this.prisma.meeting.findUnique({
+                        where: { id: this.meetingId },
+                        select: { orgId: true }
+                    }))?.orgId,
+                    storageKey,
+                    language: 'en'
+                });
             }
-        });
-        
-        console.log('💾 Audio recording saved');
+
+            await this.logBot('INFO', 'recording.processed', 'Recording uploaded and queued for transcription');
+
+        } catch (error) {
+            console.error('Failed to process recording:', error);
+            await this.logBot('ERROR', 'recording.process_failed', 'Recording processing failed', { error: (error as Error).message });
+        }
     }
 
-    private async saveTranscript(): Promise<void> {
-        if (!this.meetingId) return;
-        
-        const fullTranscript = this.transcriptBuffer.join(' ');
-        
-        // Generate word-level data
-        const words = fullTranscript.split(' ').map((word, index) => ({
-            word,
-            start: index * 0.5,
-            end: (index + 1) * 0.5,
-            confidence: 0.85 + Math.random() * 0.14
-        }));
-
-        // Generate speaker turns
-        const speakerTurns = [{
-            speaker: 'Participant 1',
-            start: 0,
-            end: words.length * 0.5,
-            text: fullTranscript
-        }];
-        
-        await this.prisma.transcript.create({
-            data: {
-                meetingId: this.meetingId,
-                language: 'en',
-                text: fullTranscript,
-                wordsJson: words,
-                speakerTurnsJson: speakerTurns,
-                accuracy: 0.92,
-                readyAt: new Date()
-            }
-        });
-        
-        console.log('📝 Transcript saved');
+    async leaveMeeting(): Promise<void> {
+        if (this.adapter) {
+            await this.adapter.leave();
+        }
+        await this.endMeeting();
     }
 
-    private async generateSummary(): Promise<void> {
-        if (!this.meetingId) return;
-        
-        const summaryText = `
-This meeting covered several key topics including project updates and team coordination. 
-The participants discussed current progress and identified areas for improvement. 
-Overall, the meeting was productive with clear action items identified.
-        `.trim();
+    private async updateBotStatus(status: string) {
+        if (!this.botRowId) return;
 
-        const decisions = [
-            {
-                decision: 'Proceed with current project timeline',
-                assignee: 'Project Manager',
-                dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-            }
-        ];
-
-        const actionItems = [
-            {
-                item: 'Complete API documentation',
-                assignee: 'Development Team',
-                priority: 'high',
-                dueDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()
-            },
-            {
-                item: 'Schedule follow-up meeting',
-                assignee: 'Meeting Organizer',
-                priority: 'medium',
-                dueDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString()
-            }
-        ];
-
-        const participants = [
-            {
-                name: 'MeetBot AI',
-                email: 'bot@meetbot.ai',
-                speakingTime: 0
-            },
-            {
-                name: 'Meeting Participant',
-                email: 'participant@example.com',
-                speakingTime: 1800 // 30 minutes in seconds
-            }
-        ];
-        
-        await this.prisma.summary.create({
+        await this.prisma.meetingsBot.update({
+            where: { id: this.botRowId },
             data: {
-                meetingId: this.meetingId,
-                model: 'gpt-4',
-                summaryText,
-                decisionsJson: decisions,
-                actionItemsJson: actionItems,
-                participantsJson: participants,
-                readyAt: new Date()
+                status: status as any,
+                updatedAt: new Date(),
+                endedAt: ['ENDED', 'FAILED'].includes(status) ? new Date() : undefined
             }
         });
-        
-        console.log('📊 Meeting summary generated');
+    }
+
+    private async logBot(level: string, event: string, message: string, meta: any = {}) {
+        if (!this.botRowId) return;
+
+        await this.prisma.meetingBotLog.create({
+            data: {
+                botId: this.botRowId,
+                level: level as any,
+                event,
+                message,
+                metaJson: meta
+            }
+        });
     }
 
     async getMeetingData(meetingId: string) {
@@ -311,44 +307,27 @@ Overall, the meeting was productive with clear action items identified.
             include: {
                 recordings: true,
                 transcripts: true,
-                summaries: true
+                summaries: true,
+                bots: {
+                    include: {
+                        logs: {
+                            orderBy: { createdAt: 'desc' },
+                            take: 50
+                        }
+                    }
+                },
+                moms: true
             }
         });
     }
 }
 
-// Factory function to create and start a meeting bot
+// Factory function
 export async function createMeetingBot(
     prisma: PrismaClient,
     config: MeetingBotConfig
 ): Promise<{ bot: MeetingBot; meetingId: string }> {
     const bot = new MeetingBot(prisma);
-    
-    // Set up event listeners
-    bot.on('meeting.joined', (meetingId) => {
-        console.log(`🎯 Bot joined meeting: ${meetingId}`);
-    });
-    
-    bot.on('meeting.started', (meetingId) => {
-        console.log(`▶️ Meeting started: ${meetingId}`);
-    });
-    
-    bot.on('meeting.ended', (meetingId) => {
-        console.log(`⏹️ Meeting ended: ${meetingId}`);
-    });
-    
-    bot.on('audio.received', (meetingId, audioData) => {
-        console.log(`🎵 Audio received: ${audioData.length} bytes`);
-    });
-    
-    bot.on('transcript.generated', (meetingId, transcript) => {
-        console.log(`💬 Transcript: "${transcript}"`);
-    });
-    
-    bot.on('error', (error) => {
-        console.error(`❌ Bot error:`, error.message);
-    });
-    
     const meetingId = await bot.joinMeeting(config);
     return { bot, meetingId };
 }

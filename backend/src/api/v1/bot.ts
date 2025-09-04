@@ -1,25 +1,25 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { createMeetingBot, MeetingBot } from '../../services/meetingBot';
-import { requireAuth, requireOrgAccess } from '../../middleware/auth';
+import { createMeetingBot } from '../../services/meetingBot';
+import { requireAuth, requireOrgAccess, requireScope } from '../../middleware/auth';
 import { ErrorResponseSchema } from './schemas';
+import { detectPlatform } from '../../utils/platform';
 
 // Store active bots
-const activeBots = new Map<string, MeetingBot>();
+const activeBots = new Map<string, any>();
 
 export async function botRoutes(fastify: FastifyInstance) {
-    // Start a bot to join a meeting
-    fastify.post('/start', {
-        preHandler: [requireAuth, requireOrgAccess],
+
+    // Join meeting endpoint
+    fastify.post('/join', {
+        preHandler: [requireAuth, requireOrgAccess, requireScope('meetings:write')],
         schema: {
             body: {
                 type: 'object',
                 properties: {
-                    meetingLink: { 
-                        type: 'string', 
-                        format: 'uri',
-                        pattern: '^https://meet\\.google\\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}$'
-                    },
-                    title: { type: 'string', minLength: 1 },
+                    meetingLink: { type: 'string', format: 'uri' },
+                    title: { type: 'string', minLength: 1, maxLength: 255 },
+                    displayName: { type: 'string', minLength: 1, maxLength: 100 },
+                    passcode: { type: 'string', maxLength: 50 },
                     consentFlags: {
                         type: 'object',
                         properties: {
@@ -38,10 +38,10 @@ export async function botRoutes(fastify: FastifyInstance) {
                     type: 'object',
                     properties: {
                         success: { type: 'boolean' },
-                        message: { type: 'string' },
                         meetingId: { type: 'string' },
-                        botStatus: { type: 'string' },
-                        meetingLink: { type: 'string' }
+                        platform: { type: 'string' },
+                        status: { type: 'string' },
+                        message: { type: 'string' }
                     }
                 },
                 400: ErrorResponseSchema,
@@ -50,38 +50,39 @@ export async function botRoutes(fastify: FastifyInstance) {
                 500: ErrorResponseSchema
             },
             tags: ['Bot'],
-            summary: 'Start MeetBot to join a Google Meet',
-            description: 'Starts a bot that joins the specified Google Meet link and records the meeting'
+            summary: 'Join meeting with bot',
+            description: 'Starts a bot to join the specified meeting (Zoom, Google Meet, or Teams)'
         }
     }, async (request: FastifyRequest<{ Body: any }>, reply: FastifyReply) => {
-        const { meetingLink, title, consentFlags } = request.body;
+        const { meetingLink, title, displayName, passcode, consentFlags } = request.body;
         const { orgId } = request.user;
 
         try {
-            // Validate Google Meet link format
-            const meetingCodeMatch = meetingLink.match(/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3})/);
-            if (!meetingCodeMatch) {
-                return reply.status(400).send({ 
-                    error: 'Invalid Google Meet link format. Expected: https://meet.google.com/xxx-xxxx-xxx' 
+            const detected = detectPlatform(meetingLink);
+
+            if (detected.platform === 'unknown') {
+                return reply.status(400).send({
+                    error: 'Unsupported meeting platform',
+                    message: 'Please provide a valid Zoom, Google Meet, or Microsoft Teams meeting link',
+                    statusCode: 400
                 });
             }
 
-            const meetingCode = meetingCodeMatch[1];
-            
             // Check if bot is already active for this meeting
-            if (activeBots.has(meetingCode)) {
-                return reply.status(400).send({ 
-                    error: 'Bot is already active for this meeting' 
+            if (activeBots.has(detected.canonicalMeetingKey)) {
+                return reply.status(400).send({
+                    error: 'Bot already active',
+                    message: 'A bot is already active for this meeting',
+                    statusCode: 400
                 });
             }
 
-            console.log(`🚀 Starting bot for meeting: ${meetingLink}`);
-
-            // Create and start the meeting bot
             const { bot, meetingId } = await createMeetingBot(fastify.prisma, {
                 meetingLink,
                 orgId,
-                title: title || `Meeting ${meetingCode}`,
+                title,
+                displayName,
+                passcode,
                 consentFlags: {
                     recording: consentFlags?.recording ?? true,
                     transcription: consentFlags?.transcription ?? true,
@@ -89,43 +90,56 @@ export async function botRoutes(fastify: FastifyInstance) {
                 }
             });
 
-            // Store the bot instance
-            activeBots.set(meetingCode, bot);
+            // Store bot instance
+            activeBots.set(detected.canonicalMeetingKey, bot);
 
-            // Clean up bot after meeting ends
+            // Clean up when meeting ends
             bot.once('meeting.ended', () => {
-                activeBots.delete(meetingCode);
-                console.log(`🧹 Cleaned up bot for meeting: ${meetingCode}`);
+                activeBots.delete(detected.canonicalMeetingKey);
+                fastify.log.info({ meetingId }, 'Bot cleaned up after meeting ended');
+            });
+
+            // Log audit event
+            await fastify.prisma.auditLog.create({
+                data: {
+                    orgId,
+                    actorType: request.user.type === 'api_key' ? 'API_KEY' : 'USER',
+                    actorId: request.user.id,
+                    action: 'bot.meeting.joined',
+                    metaJson: {
+                        meetingId,
+                        platform: detected.platform,
+                        meetingLink
+                    }
+                }
             });
 
             return reply.send({
                 success: true,
-                message: 'MeetBot started successfully',
                 meetingId,
-                botStatus: 'active',
-                meetingLink
+                platform: detected.platform,
+                status: 'joining',
+                message: 'Bot is joining the meeting'
             });
 
         } catch (error: any) {
-            fastify.log.error(error, 'Failed to start meeting bot');
-            return reply.status(500).send({ 
-                error: 'Failed to start meeting bot',
-                details: error.message 
+            fastify.log.error(error, 'Failed to join meeting with bot');
+            return reply.status(500).send({
+                error: 'Failed to join meeting',
+                message: error.message,
+                statusCode: 500
             });
         }
     });
 
-    // Stop a bot
-    fastify.post('/stop', {
-        preHandler: [requireAuth, requireOrgAccess],
+    // Leave meeting endpoint
+    fastify.post('/leave', {
+        preHandler: [requireAuth, requireOrgAccess, requireScope('meetings:write')],
         schema: {
             body: {
                 type: 'object',
                 properties: {
-                    meetingLink: { 
-                        type: 'string', 
-                        format: 'uri'
-                    }
+                    meetingLink: { type: 'string', format: 'uri' }
                 },
                 required: ['meetingLink'],
                 additionalProperties: false
@@ -139,49 +153,41 @@ export async function botRoutes(fastify: FastifyInstance) {
                     }
                 },
                 400: ErrorResponseSchema,
-                401: ErrorResponseSchema,
-                403: ErrorResponseSchema,
                 404: ErrorResponseSchema
             },
             tags: ['Bot'],
-            summary: 'Stop an active MeetBot',
-            description: 'Stops the bot for the specified meeting and saves all recorded data'
+            summary: 'Leave meeting',
+            description: 'Stops the bot and leaves the meeting'
         }
     }, async (request: FastifyRequest<{ Body: any }>, reply: FastifyReply) => {
         const { meetingLink } = request.body;
 
         try {
-            const meetingCodeMatch = meetingLink.match(/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3})/);
-            if (!meetingCodeMatch) {
-                return reply.status(400).send({ 
-                    error: 'Invalid Google Meet link format' 
-                });
-            }
-
-            const meetingCode = meetingCodeMatch[1];
-            const bot = activeBots.get(meetingCode);
+            const detected = detectPlatform(meetingLink);
+            const bot = activeBots.get(detected.canonicalMeetingKey);
 
             if (!bot) {
-                return reply.status(404).send({ 
-                    error: 'No active bot found for this meeting' 
+                return reply.status(404).send({
+                    error: 'Bot not found',
+                    message: 'No active bot found for this meeting',
+                    statusCode: 404
                 });
             }
 
-            console.log(`🛑 Stopping bot for meeting: ${meetingLink}`);
-            
-            await bot.endMeeting();
-            activeBots.delete(meetingCode);
+            await bot.leaveMeeting();
+            activeBots.delete(detected.canonicalMeetingKey);
 
             return reply.send({
                 success: true,
-                message: 'MeetBot stopped successfully'
+                message: 'Bot left the meeting successfully'
             });
 
         } catch (error: any) {
-            fastify.log.error(error, 'Failed to stop meeting bot');
-            return reply.status(500).send({ 
-                error: 'Failed to stop meeting bot',
-                details: error.message 
+            fastify.log.error(error, 'Failed to leave meeting');
+            return reply.status(500).send({
+                error: 'Failed to leave meeting',
+                message: error.message,
+                statusCode: 500
             });
         }
     });
@@ -199,7 +205,8 @@ export async function botRoutes(fastify: FastifyInstance) {
                             items: {
                                 type: 'object',
                                 properties: {
-                                    meetingCode: { type: 'string' },
+                                    meetingKey: { type: 'string' },
+                                    platform: { type: 'string' },
                                     status: { type: 'string' },
                                     startedAt: { type: 'string' }
                                 }
@@ -207,30 +214,45 @@ export async function botRoutes(fastify: FastifyInstance) {
                         },
                         totalActive: { type: 'number' }
                     }
-                },
-                401: ErrorResponseSchema,
-                403: ErrorResponseSchema
+                }
             },
             tags: ['Bot'],
-            summary: 'Get active bot status',
-            description: 'Returns information about currently active meeting bots'
+            summary: 'Get bot status',
+            description: 'Returns information about currently active bots'
         }
     }, async (request: FastifyRequest, reply: FastifyReply) => {
-        const botStatus = Array.from(activeBots.entries()).map(([meetingCode, bot]) => ({
-            meetingCode,
-            status: 'active',
-            startedAt: new Date().toISOString() // In real implementation, track start time
+        const { orgId } = request.user;
+
+        // Get active bots for this organization
+        const orgBots = await fastify.prisma.meetingsBot.findMany({
+            where: {
+                status: { in: ['JOINING', 'IN_MEETING', 'RECORDING'] },
+                meeting: { orgId }
+            },
+            include: {
+                meeting: {
+                    select: { platform: true, meetingLink: true }
+                }
+            },
+            orderBy: { startedAt: 'desc' }
+        });
+
+        const activeBotsList = orgBots.map(bot => ({
+            meetingKey: detectPlatform(bot.meeting.meetingLink || '').canonicalMeetingKey,
+            platform: bot.platform,
+            status: bot.status.toLowerCase(),
+            startedAt: bot.startedAt?.toISOString()
         }));
 
         return reply.send({
-            activeBots: botStatus,
+            activeBots: activeBotsList,
             totalActive: activeBots.size
         });
     });
 
-    // Get meeting data after bot has finished
+    // Get meeting data with bot information
     fastify.get('/meeting/:id/data', {
-        preHandler: [requireAuth, requireOrgAccess],
+        preHandler: [requireAuth, requireOrgAccess, requireScope('meetings:read')],
         schema: {
             params: {
                 type: 'object',
@@ -243,30 +265,19 @@ export async function botRoutes(fastify: FastifyInstance) {
                 200: {
                     type: 'object',
                     properties: {
-                        meeting: {
-                            type: 'object',
-                            properties: {
-                                id: { type: 'string' },
-                                title: { type: 'string' },
-                                platform: { type: 'string' },
-                                meetingLink: { type: 'string' },
-                                status: { type: 'string' },
-                                startedAt: { type: 'string', nullable: true },
-                                endedAt: { type: 'string', nullable: true },
-                                recordings: { type: 'array' },
-                                transcripts: { type: 'array' },
-                                summaries: { type: 'array' }
-                            }
-                        }
+                        meeting: { type: 'object' },
+                        recordings: { type: 'array' },
+                        transcripts: { type: 'array' },
+                        summaries: { type: 'array' },
+                        bots: { type: 'array' },
+                        minutesOfMeeting: { type: 'array' }
                     }
                 },
-                404: ErrorResponseSchema,
-                401: ErrorResponseSchema,
-                403: ErrorResponseSchema
+                404: ErrorResponseSchema
             },
             tags: ['Bot'],
             summary: 'Get meeting data',
-            description: 'Returns complete meeting data including recordings, transcripts, and summaries'
+            description: 'Returns complete meeting data including bot information'
         }
     }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
         const { id } = request.params;
@@ -274,56 +285,172 @@ export async function botRoutes(fastify: FastifyInstance) {
 
         try {
             const meeting = await fastify.prisma.meeting.findFirst({
-                where: { 
-                    id,
-                    orgId // Ensure user can only access their org's meetings
-                },
+                where: { id, orgId },
                 include: {
                     recordings: true,
                     transcripts: true,
-                    summaries: true
+                    summaries: true,
+                    bots: {
+                        include: {
+                            logs: {
+                                orderBy: { createdAt: 'desc' },
+                                take: 20
+                            }
+                        }
+                    },
+                    moms: true
                 }
             });
 
             if (!meeting) {
-                return reply.status(404).send({ 
-                    error: 'Meeting not found' 
+                return reply.status(404).send({
+                    error: 'Meeting not found',
+                    message: 'Meeting not found or access denied',
+                    statusCode: 404
                 });
             }
 
-            return reply.send({
+            // Transform data for response
+            const responseData = {
                 meeting: {
                     ...meeting,
-                    startedAt: meeting.startedAt?.toISOString() || null,
-                    endedAt: meeting.endedAt?.toISOString() || null,
+                    startedAt: meeting.startedAt?.toISOString(),
+                    endedAt: meeting.endedAt?.toISOString(),
+                    scheduledAt: meeting.scheduledAt?.toISOString(),
                     createdAt: meeting.createdAt.toISOString(),
-                    updatedAt: meeting.updatedAt.toISOString(),
-                    recordings: meeting.recordings.map(r => ({
-                        ...r,
-                        sizeBytes: r.sizeBytes.toString(), // Convert BigInt to string
-                        createdAt: r.createdAt.toISOString(),
-                        updatedAt: r.updatedAt.toISOString()
-                    })),
-                    transcripts: meeting.transcripts.map(t => ({
-                        ...t,
-                        readyAt: t.readyAt?.toISOString() || null,
-                        createdAt: t.createdAt.toISOString(),
-                        updatedAt: t.updatedAt.toISOString()
-                    })),
-                    summaries: meeting.summaries.map(s => ({
-                        ...s,
-                        readyAt: s.readyAt?.toISOString() || null,
-                        createdAt: s.createdAt.toISOString(),
-                        updatedAt: s.updatedAt.toISOString()
+                    updatedAt: meeting.updatedAt.toISOString()
+                },
+                recordings: meeting.recordings.map(r => ({
+                    ...r,
+                    sizeBytes: r.sizeBytes.toString(),
+                    createdAt: r.createdAt.toISOString(),
+                    updatedAt: r.updatedAt.toISOString()
+                })),
+                transcripts: meeting.transcripts.map(t => ({
+                    ...t,
+                    readyAt: t.readyAt?.toISOString(),
+                    createdAt: t.createdAt.toISOString(),
+                    updatedAt: t.updatedAt.toISOString()
+                })),
+                summaries: meeting.summaries.map(s => ({
+                    ...s,
+                    readyAt: s.readyAt?.toISOString(),
+                    createdAt: s.createdAt.toISOString(),
+                    updatedAt: s.updatedAt.toISOString()
+                })),
+                bots: meeting.bots.map(b => ({
+                    ...b,
+                    startedAt: b.startedAt?.toISOString(),
+                    endedAt: b.endedAt?.toISOString(),
+                    createdAt: b.createdAt.toISOString(),
+                    updatedAt: b.updatedAt.toISOString(),
+                    logs: b.logs.map(l => ({
+                        ...l,
+                        createdAt: l.createdAt.toISOString()
                     }))
-                }
-            });
+                })),
+                minutesOfMeeting: meeting.moms.map(m => ({
+                    ...m,
+                    readyAt: m.readyAt?.toISOString(),
+                    createdAt: m.createdAt.toISOString(),
+                    updatedAt: m.updatedAt.toISOString()
+                }))
+            };
+
+            return reply.send(responseData);
 
         } catch (error: any) {
             fastify.log.error(error, 'Failed to get meeting data');
-            return reply.status(500).send({ 
-                error: 'Failed to get meeting data' 
+            return reply.status(500).send({
+                error: 'Failed to get meeting data',
+                message: error.message,
+                statusCode: 500
             });
         }
+    });
+
+    // Recording control endpoints
+    fastify.post('/recording/start', {
+        preHandler: [requireAuth, requireOrgAccess, requireScope('meetings:write')],
+        schema: {
+            body: {
+                type: 'object',
+                properties: {
+                    meetingLink: { type: 'string', format: 'uri' }
+                },
+                required: ['meetingLink']
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean' },
+                        message: { type: 'string' }
+                    }
+                },
+                404: ErrorResponseSchema
+            },
+            tags: ['Bot'],
+            summary: 'Start recording',
+            description: 'Manually start recording for an active bot'
+        }
+    }, async (request: FastifyRequest<{ Body: { meetingLink: string } }>, reply: FastifyReply) => {
+        const detected = detectPlatform(request.body.meetingLink);
+        const bot = activeBots.get(detected.canonicalMeetingKey);
+
+        if (!bot) {
+            return reply.status(404).send({
+                error: 'Bot not found',
+                message: 'No active bot found for this meeting',
+                statusCode: 404
+            });
+        }
+
+        return reply.send({
+            success: true,
+            message: 'Recording is automatically managed by the bot'
+        });
+    });
+
+    fastify.post('/recording/stop', {
+        preHandler: [requireAuth, requireOrgAccess, requireScope('meetings:write')],
+        schema: {
+            body: {
+                type: 'object',
+                properties: {
+                    meetingLink: { type: 'string', format: 'uri' }
+                },
+                required: ['meetingLink']
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean' },
+                        message: { type: 'string' }
+                    }
+                },
+                404: ErrorResponseSchema
+            },
+            tags: ['Bot'],
+            summary: 'Stop recording',
+            description: 'Manually stop recording for an active bot'
+        }
+    }, async (request: FastifyRequest<{ Body: { meetingLink: string } }>, reply: FastifyReply) => {
+        const detected = detectPlatform(request.body.meetingLink);
+        const bot = activeBots.get(detected.canonicalMeetingKey);
+
+        if (!bot) {
+            return reply.status(404).send({
+                error: 'Bot not found',
+                message: 'No active bot found for this meeting',
+                statusCode: 404
+            });
+        }
+
+        return reply.send({
+            success: true,
+            message: 'Recording will stop when the bot leaves the meeting'
+        });
     });
 }

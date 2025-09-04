@@ -27,44 +27,41 @@ export async function setupQueue(redis: Redis): Promise<{
     const webhookQueue = new Queue('webhook', { connection: redis });
     const retentionQueue = new Queue('retention', { connection: redis });
 
-    // Job context (will be injected by main app)
-    let jobContext: JobContext;
-
     // Create workers
     const transcribeWorker = new Worker('transcribe', async (job: Job) => {
-        return transcribeHandler(job, jobContext);
+        return transcribeHandler(job, getJobContext());
     }, {
         connection: redis,
         concurrency: 2,
-        removeOnComplete: 50,
-        removeOnFail: 20,
+        removeOnComplete: { count: 50 },
+        removeOnFail: { count: 20 },
     });
 
     const summarizeWorker = new Worker('summarize', async (job: Job) => {
-        return summarizeHandler(job, jobContext);
+        return summarizeHandler(job, getJobContext());
     }, {
         connection: redis,
         concurrency: 1, // Summarization is more resource intensive
-        removeOnComplete: 50,
-        removeOnFail: 20,
+        removeOnComplete: { count: 50 },
+        removeOnFail: { count: 20 },
     });
 
     const webhookWorker = new Worker('webhook', async (job: Job) => {
-        return webhookHandler(job, jobContext);
+        return webhookHandler(job, getJobContext());
     }, {
         connection: redis,
         concurrency: 5,
-        removeOnComplete: 100,
-        removeOnFail: 50,
+        removeOnComplete: { count: 100 },
+        removeOnFail: { count: 50 },
     });
 
     const retentionWorker = new Worker('retention', async (job: Job) => {
-        return retentionHandler(job, jobContext);
+        return retentionHandler(job, getJobContext());
     }, {
         connection: redis,
         concurrency: 1,
-        removeOnComplete: 10,
-        removeOnFail: 10,
+        removeOnComplete: { count: 10 },
+        removeOnFail: { count: 10 },
     });
 
     // Error handling
@@ -112,7 +109,7 @@ async function scheduleRecurringJobs(retentionQueue: Queue) {
         type: 'cleanup',
     }, {
         repeat: {
-            cron: '0 2 * * *', // Daily at 2 AM
+            pattern: '0 2 * * *', // Daily at 2 AM
         },
         removeOnComplete: 5,
         removeOnFail: 5,

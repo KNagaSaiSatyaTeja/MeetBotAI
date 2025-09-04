@@ -15,10 +15,9 @@ export interface TranscribeJobData {
 export async function transcribeHandler(job: Job<TranscribeJobData>, context: JobContext): Promise<void> {
     const { recordingId, meetingId, orgId, language = 'en', storageKey, jobId } = job.data;
 
-    console.log(`Starting transcription job for recording ${recordingId}`);
+    console.log(`🎙️ Starting transcription for recording ${recordingId}`);
 
     try {
-        // Update job status to in progress
         if (jobId) {
             await updateJobStatus(context.prisma, jobId, JobStatus.IN_PROGRESS);
         }
@@ -32,9 +31,10 @@ export async function transcribeHandler(job: Job<TranscribeJobData>, context: Jo
                         id: true,
                         orgId: true,
                         title: true,
-                    },
-                },
-            },
+                        platform: true
+                    }
+                }
+            }
         });
 
         if (!recording) {
@@ -42,72 +42,71 @@ export async function transcribeHandler(job: Job<TranscribeJobData>, context: Jo
         }
 
         if (recording.meeting.orgId !== orgId) {
-            throw new Error(`Recording ${recordingId} does not belong to organization ${orgId}`);
+            throw new Error(`Recording ${recordingId} access denied`);
         }
 
         // Check if transcript already exists
         const existingTranscript = await context.prisma.transcript.findFirst({
-            where: { meetingId },
+            where: { meetingId }
         });
 
         if (existingTranscript) {
-            console.log(`Transcript already exists for meeting ${meetingId}, skipping`);
+            console.log(`📝 Transcript already exists for meeting ${meetingId}`);
+            if (jobId) {
+                await updateJobStatus(context.prisma, jobId, JobStatus.COMPLETED);
+            }
             return;
         }
 
-        // Get file URL for STT service
+        // Get file URL for transcription
         const fileUrl = recording.audioUrl || recording.videoUrl;
         if (!fileUrl) {
-            throw new Error(`No audio/video URL found for recording ${recordingId}`);
+            throw new Error(`No media URL found for recording ${recordingId}`);
         }
 
+        console.log(`🔄 Transcribing file: ${fileUrl}`);
+
         // Perform transcription
-        console.log(`Transcribing file: ${fileUrl} (language: ${language})`);
         const transcriptionResult = await sttAdapter.transcribe(fileUrl, language);
+
+        // Enhance transcript with speaker detection and formatting
+        const enhancedResult = await enhanceTranscript(transcriptionResult, recording.meeting);
 
         // Save transcript to database
         const transcript = await context.prisma.transcript.create({
             data: {
                 meetingId,
-                language: transcriptionResult.language,
-                text: transcriptionResult.text,
-                wordsJson: transcriptionResult.words,
-                speakerTurnsJson: transcriptionResult.speakerTurns,
-                accuracy: transcriptionResult.accuracy,
-                readyAt: new Date(),
-            },
+                language: enhancedResult.language,
+                text: enhancedResult.text,
+                wordsJson: enhancedResult.words,
+                speakerTurnsJson: enhancedResult.speakerTurns,
+                accuracy: enhancedResult.accuracy,
+                readyAt: new Date()
+            }
         });
 
-        console.log(`Transcript created with ID: ${transcript.id}`);
+        console.log(`✅ Transcript created: ${transcript.id}`);
 
-        // Update meeting status
-        await context.prisma.meeting.update({
-            where: { id: meetingId },
-            data: {
-                status: 'COMPLETED',
-                endedAt: new Date(),
-            },
-        });
-
-        // Update job status to completed
+        // Update job status
         if (jobId) {
             await updateJobStatus(context.prisma, jobId, JobStatus.COMPLETED);
         }
 
         // Enqueue summarization job
-        const { summarizeQueue } = context as any; // Type assertion for queue access
-        if (summarizeQueue) {
-            await summarizeQueue.add('summarize', {
+        const jobQueue = (global as any).__jobQueue;
+        if (jobQueue?.summarizeQueue) {
+            await jobQueue.summarizeQueue.add('summarize', {
                 transcriptId: transcript.id,
                 meetingId,
                 orgId,
-                text: transcriptionResult.text,
+                text: enhancedResult.text,
+                platform: recording.meeting.platform
             }, {
                 attempts: 3,
-                backoff: { type: 'exponential', delay: 2000 },
+                backoff: { type: 'exponential', delay: 2000 }
             });
 
-            console.log(`Enqueued summarization job for transcript ${transcript.id}`);
+            console.log(`📊 Enqueued summarization for transcript ${transcript.id}`);
         }
 
         // Send webhook notification
@@ -115,37 +114,37 @@ export async function transcribeHandler(job: Job<TranscribeJobData>, context: Jo
             meetingId,
             transcriptId: transcript.id,
             recordingId,
-            language: transcriptionResult.language,
-            accuracy: transcriptionResult.accuracy,
+            language: enhancedResult.language,
+            accuracy: enhancedResult.accuracy,
+            wordCount: enhancedResult.words.length,
+            duration: Math.max(...enhancedResult.words.map(w => w.end)) || 0
         });
 
-        console.log(`Transcription job completed for recording ${recordingId}`);
-    } catch (error) {
-        console.error(`Transcription job failed for recording ${recordingId}:`, error);
+        console.log(`🎉 Transcription completed for recording ${recordingId}`);
 
-        // Update job attempts
+    } catch (error) {
+        console.error(`❌ Transcription failed for recording ${recordingId}:`, error);
+
         if (jobId) {
             await incrementJobAttempts(context.prisma, jobId);
         }
 
-        // Update meeting status to failed if this is the final attempt
+        // Mark as failed if final attempt
         if (job.attemptsMade >= (job.opts.attempts || 3)) {
             await context.prisma.meeting.update({
                 where: { id: meetingId },
-                data: { status: 'FAILED' },
+                data: { status: 'FAILED' }
             });
 
-            // Update job status to failed
             if (jobId) {
                 await updateJobStatus(context.prisma, jobId, JobStatus.FAILED, error.message);
             }
 
-            // Send webhook notification for failure
             await sendWebhookNotification(context, orgId, 'meeting.failed', {
                 meetingId,
                 recordingId,
                 error: error.message,
-                stage: 'transcription',
+                stage: 'transcription'
             });
         }
 
@@ -153,7 +152,27 @@ export async function transcribeHandler(job: Job<TranscribeJobData>, context: Jo
     }
 }
 
-// Helper function to send webhook notifications
+async function enhanceTranscript(result: any, meeting: any) {
+    // Add meeting context to speaker turns
+    const enhancedSpeakerTurns = result.speakerTurns.map((turn: any, index: number) => ({
+        ...turn,
+        speaker: turn.speaker || `Speaker ${index + 1}`,
+        confidence: turn.confidence || 0.9
+    }));
+
+    // Add metadata
+    return {
+        ...result,
+        speakerTurns: enhancedSpeakerTurns,
+        metadata: {
+            ...result.metadata,
+            platform: meeting.platform,
+            meetingTitle: meeting.title,
+            processedAt: new Date().toISOString()
+        }
+    };
+}
+
 async function sendWebhookNotification(
     context: JobContext,
     orgId: string,
@@ -161,20 +180,17 @@ async function sendWebhookNotification(
     data: any
 ): Promise<void> {
     try {
-        // Find active webhooks for this organization and event
         const webhooks = await context.prisma.webhook.findMany({
             where: {
                 orgId,
                 active: true,
-                events: { has: event },
-            },
+                events: { has: event }
+            }
         });
 
-        // Enqueue webhook delivery jobs
-        const { webhookQueue } = context as any;
-        if (webhookQueue && webhooks.length > 0) {
+        const jobQueue = (global as any).__jobQueue;
+        if (jobQueue?.webhookQueue && webhooks.length > 0) {
             for (const webhook of webhooks) {
-                // Create webhook delivery record
                 const delivery = await context.prisma.webhookDelivery.create({
                     data: {
                         webhookId: webhook.id,
@@ -182,28 +198,26 @@ async function sendWebhookNotification(
                         payloadJson: {
                             event,
                             timestamp: new Date().toISOString(),
-                            data,
+                            data
                         },
-                        status: 'PENDING',
-                    },
+                        status: 'PENDING'
+                    }
                 });
 
-                // Enqueue delivery job
-                await webhookQueue.add('webhook', {
+                await jobQueue.webhookQueue.add('webhook', {
                     deliveryId: delivery.id,
                     webhookId: webhook.id,
                     url: webhook.url,
                     secret: webhook.secret,
                     event,
-                    payload: delivery.payloadJson,
+                    payload: delivery.payloadJson
                 }, {
                     attempts: 3,
-                    backoff: { type: 'exponential', delay: 1000 },
+                    backoff: { type: 'exponential', delay: 1000 }
                 });
             }
         }
     } catch (error) {
         console.error('Failed to send webhook notification:', error);
-        // Don't throw - webhook failures shouldn't fail the main job
     }
 }

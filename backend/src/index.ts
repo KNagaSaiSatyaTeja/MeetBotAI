@@ -15,15 +15,14 @@ import { authRoutes } from './api/v1/auth';
 import { searchRoutes } from './api/v1/search';
 import { botRoutes } from './api/v1/bot';
 
-
 // Job Queue
-import { setupQueue } from './jobs/queue';
+import { setupQueue, injectJobContext } from './jobs/queue';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 // Environment
-const PORT = parseInt(process.env.PORT, 10);
+const PORT = parseInt(process.env.PORT || '5000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
@@ -52,14 +51,17 @@ async function buildApp() {
         log: NODE_ENV === 'development' ? ['query', 'info', 'warn', 'error'] : ['warn', 'error'],
     });
 
-    const redis = new Redis(process.env.REDIS_URL , {
-        retryDelayOnFailover: 100,
-        maxRetriesPerRequest: null, // Fixed for BullMQ compatibility
+    const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+        maxRetriesPerRequest: null,
         lazyConnect: true,
     });
 
     // Setup job queue
     const jobQueue = await setupQueue(redis);
+
+    // Inject job context
+    injectJobContext(jobQueue, { redis, prisma });
+    (global as any).__jobQueue = jobQueue;
 
     // Add services to fastify context
     app.decorate('prisma', prisma);
@@ -84,9 +86,9 @@ async function buildApp() {
     });
 
     await app.register(require('@fastify/rate-limit'), {
-        max: parseInt(process.env.API_RATE_LIMIT , 10),
+        max: parseInt(process.env.API_RATE_LIMIT || '100', 10),
         timeWindow: '1 minute',
-        keyGenerator: (req) => {
+        keyGenerator: (req: any) => {
             const apiKey = req.headers['x-api-key'] as string;
             return apiKey || req.ip;
         },
@@ -99,55 +101,55 @@ async function buildApp() {
     });
 
     // Swagger documentation
-    await app.register(require('@fastify/swagger'), {
-        openapi: {
-            openapi: '3.0.0',
-            info: {
-                title: 'AI Meeting Bot API',
-                description: 'REST API for AI Meeting Bot - Transcription and Summarization',
-                version: '1.0.0',
-            },
-            servers: [
-                {
-                    url: `http://localhost:${PORT}`,
-                    description: 'Development server',
+    if (process.env.ENABLE_SWAGGER === 'true') {
+        await app.register(require('@fastify/swagger'), {
+            openapi: {
+                openapi: '3.0.0',
+                info: {
+                    title: 'AI Meeting Bot API',
+                    description: 'Production-ready API for AI Meeting Bot with cross-platform support',
+                    version: '1.0.0',
                 },
-            ],
-            components: {
-                securitySchemes: {
-                    ApiKeyAuth: {
-                        type: 'apiKey',
-                        in: 'header',
-                        name: 'x-api-key',
+                servers: [
+                    {
+                        url: `http://localhost:${PORT}`,
+                        description: 'Development server',
                     },
-                    BearerAuth: {
-                        type: 'http',
-                        scheme: 'bearer',
-                        bearerFormat: 'JWT',
+                ],
+                components: {
+                    securitySchemes: {
+                        ApiKeyAuth: {
+                            type: 'apiKey',
+                            in: 'header',
+                            name: 'x-api-key',
+                        },
+                        BearerAuth: {
+                            type: 'http',
+                            scheme: 'bearer',
+                            bearerFormat: 'JWT',
+                        },
                     },
                 },
+                security: [
+                    { ApiKeyAuth: [] },
+                    { BearerAuth: [] },
+                ],
             },
-            security: [
-                { ApiKeyAuth: [] },
-                { BearerAuth: [] },
-            ],
-        },
-    });
+        });
 
-    await app.register(require('@fastify/swagger-ui'), {
-        routePrefix: '/docs',
-        uiConfig: {
-            docExpansion: 'full',
-            deepLinking: false,
-        },
-    });
+        await app.register(require('@fastify/swagger-ui'), {
+            routePrefix: '/docs',
+            uiConfig: {
+                docExpansion: 'full',
+                deepLinking: false,
+            },
+        });
+    }
 
     // Register middleware
     await app.register(observabilityMiddleware);
     await app.register(authMiddleware);
     await app.register(rbacMiddleware);
-
-    // Health check is handled by observability middleware
 
     // API Routes
     await app.register(meetingsRoutes, { prefix: '/v1' });
@@ -155,7 +157,6 @@ async function buildApp() {
     await app.register(authRoutes, { prefix: '/v1' });
     await app.register(searchRoutes, { prefix: '/v1' });
     await app.register(botRoutes, { prefix: '/v1/bot' });
-
 
     // Global error handler
     app.setErrorHandler(async (error, request, reply) => {
@@ -170,7 +171,6 @@ async function buildApp() {
         }, 'Request error');
 
         if (statusCode >= 500) {
-            // Don't leak internal errors to client
             return reply.status(statusCode).send({
                 error: 'Internal Server Error',
                 message: NODE_ENV === 'development' ? error.message : 'An internal error occurred',
@@ -216,8 +216,12 @@ async function start() {
             host: HOST,
         });
 
-        app.log.info(`🚀 Server running at http://${HOST}:${PORT}`);
-        app.log.info(`📚 API documentation at http://${HOST}:${PORT}/docs`);
+        app.log.info(`🚀 AI Meeting Bot API running at http://${HOST}:${PORT}`);
+        if (process.env.ENABLE_SWAGGER === 'true') {
+            app.log.info(`📚 API documentation at http://${HOST}:${PORT}/docs`);
+        }
+        app.log.info(`📊 Metrics endpoint at http://${HOST}:${process.env.METRICS_PORT || '9464'}/metrics`);
+
     } catch (error) {
         console.error('Failed to start server:', error);
         process.exit(1);

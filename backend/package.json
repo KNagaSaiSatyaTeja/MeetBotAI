@@ -1,7 +1,7 @@
 {
     "name": "@ai-meeting-bot/backend",
     "version": "1.0.0",
-    "description": "AI Meeting Bot Backend API",
+    "description": "AI Meeting Bot Backend API - Production Ready",
     "main": "dist/index.js",
     "scripts": {
         "dev": "tsx watch src/index.ts",
@@ -18,7 +18,18 @@
         "db:push": "prisma db push",
         "db:migrate": "prisma migrate dev",
         "db:studio": "prisma studio",
-        "audit": "npm audit"
+        "audit": "npm audit",
+        "test:bot": "tsx src/scripts/testBot.ts",
+        "test:zoom": "tsx src/test-zoom-simple.ts",
+        "check:env": "tsx src/check-env.ts",
+        "debug:zoom": "tsx src/debug-zoom.ts",
+        "test:supabase": "tsx src/test-supabase.ts",
+        "test:manual": "tsx src/test-zoom-manual.ts",
+        "test:live": "tsx src/test-live-meeting.ts",
+        "docker:build": "docker build -t meetingbot-api .",
+        "docker:run": "docker-compose -f docker-compose.prod.yml up -d",
+        "docker:stop": "docker-compose -f docker-compose.prod.yml down",
+        "docker:logs": "docker-compose -f docker-compose.prod.yml logs -f api"
     },
     "dependencies": {
         "@aws-sdk/client-s3": "^3.470.0",
@@ -47,6 +58,8 @@
         "openai": "^4.24.7",
         "pino": "^8.17.2",
         "pino-pretty": "^10.3.1",
+        "puppeteer": "^22.10.0",
+        "ffmpeg-static": "^5.2.0",
         "zod": "^3.22.4"
     },
     "devDependencies": {

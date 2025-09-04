@@ -153,6 +153,26 @@ export const SuccessResponseSchema = {
     required: ['success']
 };
 
+// Bot lifecycle schemas
+export const BotJoinRequestSchema = {
+    type: 'object',
+    properties: {
+        meetingLink: { type: 'string', format: 'uri' },
+        title: { type: 'string', minLength: 1 },
+        consentFlags: {
+            type: 'object',
+            properties: {
+                recording: { type: 'boolean' },
+                transcription: { type: 'boolean' },
+                summary: { type: 'boolean' },
+            },
+            additionalProperties: false,
+        },
+    },
+    required: ['meetingLink'],
+    additionalProperties: false,
+} as const;
+
 export const PaginatedResponseSchema = {
     type: 'object',
     properties: {

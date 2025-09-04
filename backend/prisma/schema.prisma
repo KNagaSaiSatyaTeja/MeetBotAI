@@ -43,6 +43,7 @@ model Organization {
   apiKeys   ApiKey[]
   auditLogs AuditLog[]
   webhooks  Webhook[]
+  botApiClients BotApiClient[]
 
   @@map("organizations")
 }
@@ -66,6 +67,8 @@ model Meeting {
   recordings   Recording[]
   transcripts  Transcript[]
   summaries    Summary[]
+  bots         MeetingsBot[]
+  moms         MeetingMOM[]
 
   @@map("meetings")
 }
@@ -123,6 +126,83 @@ model Summary {
   meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
 
   @@map("summaries")
+}
+
+// New: Meeting Bot instance tracking
+model MeetingsBot {
+  id          String     @id @default(cuid())
+  meetingId   String
+  platform    String     // zoom, google-meet, teams
+  status      BotStatus  @default(IDLE)
+  joinLink    String?
+  startedAt   DateTime? 
+  endedAt     DateTime?
+  metaJson    Json       @default("{}")
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  meeting     Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  logs        MeetingBotLog[]
+
+  @@index([meetingId])
+  @@map("meetings_bots")
+}
+
+// New: Bot lifecycle and event logs
+model MeetingBotLog {
+  id        String    @id @default(cuid())
+  botId     String
+  level     LogLevel  @default(INFO)
+  event     String
+  message   String
+  metaJson  Json      @default("{}")
+  createdAt DateTime  @default(now())
+
+  // Relations
+  bot       MeetingsBot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId])
+  @@map("meeting_bot_logs")
+}
+
+// New: Structured Minutes of Meeting (MOM)
+model MeetingMOM {
+  id               String    @id @default(cuid())
+  meetingId        String
+  summaryText      String
+  decisionsJson    Json      @default("[]")
+  actionItemsJson  Json      @default("[]")
+  attendeesJson    Json      @default("[]")
+  topicsJson       Json      @default("[]")
+  readyAt          DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Relations
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@index([meetingId])
+  @@map("meeting_mom")
+}
+
+// New: Bot API clients for B2B access
+model BotApiClient {
+  id         String   @id @default(cuid())
+  orgId      String
+  name       String
+  hash       String   @unique // bcrypt hash of the API key
+  scopes     String[] @default([])
+  rateLimit  Int      @default(60)
+  lastUsedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@map("bot_api_clients")
 }
 
 model Job {
@@ -240,4 +320,23 @@ enum WebhookStatus {
   DELIVERED
   FAILED
   CANCELLED
+}
+
+// New: Bot status enum
+enum BotStatus {
+  IDLE
+  JOINING
+  IN_MEETING
+  RECORDING
+  LEAVING
+  ENDED
+  FAILED
+}
+
+// New: Log level enum for bot logs
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
 }
