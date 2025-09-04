@@ -13,6 +13,7 @@ import { meetingsRoutes } from './api/v1/meetings';
 import { webhooksRoutes } from './api/v1/webhooks';
 import { authRoutes } from './api/v1/auth';
 import { searchRoutes } from './api/v1/search';
+import { botRoutes } from './api/v1/bot';
 
 
 // Job Queue
@@ -153,6 +154,7 @@ async function buildApp() {
     await app.register(webhooksRoutes, { prefix: '/v1' });
     await app.register(authRoutes, { prefix: '/v1' });
     await app.register(searchRoutes, { prefix: '/v1' });
+    await app.register(botRoutes, { prefix: '/v1/bot' });
 
 
     // Global error handler
