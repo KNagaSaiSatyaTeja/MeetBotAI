@@ -4,6 +4,8 @@ import { detectPlatform, MeetingPlatform } from '../utils/platform';
 import { ZoomAdapter } from './bot-adapters/zoom';
 import { RecordingService } from './recordingService';
 import { storageAdapter } from '../adapters/storage';
+import { resourceManager } from './resourceManager';
+import { connectionPool } from './connectionPool';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -37,6 +39,8 @@ export class MeetingBot extends EventEmitter {
     private adapter: any = null;
     private recordingService: RecordingService;
     private isActive = false;
+    private browserResourceId?: string;
+    private recordingResourceId?: string;
 
     constructor(prisma: PrismaClient) {
         super();
@@ -47,6 +51,15 @@ export class MeetingBot extends EventEmitter {
     async joinMeeting(config: MeetingBotConfig): Promise<string> {
         try {
             console.log(`🤖 MeetingBot joining: ${config.meetingLink}`);
+
+            // Check resource availability
+            const hasResources = await resourceManager.waitForResourceAvailability(30000);
+            if (!hasResources) {
+                throw new Error('System resources unavailable. Please try again later.');
+            }
+
+            // Acquire browser resource
+            this.browserResourceId = await resourceManager.acquireBrowser();
 
             const detected = detectPlatform(config.meetingLink);
             this.platform = detected.platform;
@@ -157,6 +170,9 @@ export class MeetingBot extends EventEmitter {
         if (!this.meetingId) return;
 
         try {
+            // Acquire recording resource
+            this.recordingResourceId = await resourceManager.acquireRecording();
+
             await this.updateBotStatus('RECORDING');
 
             const outputDir = process.env.RECORDINGS_DIR || '/tmp/recordings';
@@ -193,6 +209,12 @@ export class MeetingBot extends EventEmitter {
                 await this.processRecording(recordingPath);
             }
 
+            // Release recording resource
+            if (this.recordingResourceId) {
+                resourceManager.releaseResource(this.recordingResourceId);
+                this.recordingResourceId = undefined;
+            }
+
             // Update meeting status
             await this.prisma.meeting.update({
                 where: { id: this.meetingId },
@@ -211,6 +233,12 @@ export class MeetingBot extends EventEmitter {
             console.error('❌ Failed to end meeting:', error);
             await this.updateBotStatus('FAILED');
             this.emit('error', error as Error);
+        } finally {
+            // Always release browser resource
+            if (this.browserResourceId) {
+                resourceManager.releaseResource(this.browserResourceId);
+                this.browserResourceId = undefined;
+            }
         }
     }
 
@@ -218,48 +246,66 @@ export class MeetingBot extends EventEmitter {
         if (!this.meetingId) return;
 
         try {
-            // Upload recording to storage
+            // Read file buffer
             const fileBuffer = await fs.readFile(filePath);
             const storageKey = `recordings/${this.meetingId}/audio.wav`;
 
-            const uploadResult = await storageAdapter.uploadFile(
-                storageKey,
-                fileBuffer,
-                'audio/wav'
-            );
+            // Try to upload to storage, but don't fail if it doesn't work
+            let uploadResult;
+            let audioUrl = `file://${filePath}`; // Local file URL as fallback
 
-            // Create recording record
+            try {
+                uploadResult = await storageAdapter.uploadFile(
+                    storageKey,
+                    fileBuffer,
+                    'audio/wav'
+                );
+                audioUrl = uploadResult.url;
+                console.log('✅ Recording uploaded to storage successfully');
+            } catch (storageError) {
+                console.log('⚠️  Storage upload failed, keeping local file:', storageError.message);
+                console.log(`📁 Local recording file: ${filePath}`);
+            }
+
+            // Create recording record with local file reference
             const recording = await this.prisma.recording.create({
                 data: {
                     meetingId: this.meetingId,
                     hasVideo: false,
-                    audioUrl: uploadResult.url,
+                    audioUrl: audioUrl,
                     sizeBytes: BigInt(fileBuffer.length),
-                    checksum: uploadResult.checksum,
-                    storageRegion: process.env.S3_REGION || 'us-east-1',
-                    encryptionMeta: uploadResult.encryptionMeta || {}
+                    checksum: uploadResult?.checksum || 'local-file',
+                    storageRegion: process.env.S3_REGION || 'local',
+                    encryptionMeta: uploadResult?.encryptionMeta || { provider: 'local' }
                 }
             });
 
-            // Clean up local file
-            await fs.unlink(filePath).catch(() => { });
-
-            // Enqueue transcription job
-            const { transcribeQueue } = (global as any).__jobQueue || {};
-            if (transcribeQueue) {
-                await transcribeQueue.add('transcribe', {
-                    recordingId: recording.id,
-                    meetingId: this.meetingId,
-                    orgId: (await this.prisma.meeting.findUnique({
-                        where: { id: this.meetingId },
-                        select: { orgId: true }
-                    }))?.orgId,
-                    storageKey,
-                    language: 'en'
-                });
+            // Don't delete local file if storage upload failed
+            if (uploadResult) {
+                await fs.unlink(filePath).catch(() => { });
+                console.log('🗑️  Local recording file cleaned up');
+            } else {
+                console.log('💾 Local recording file preserved');
             }
 
-            await this.logBot('INFO', 'recording.processed', 'Recording uploaded and queued for transcription');
+            // Enqueue transcription job (only if we have storage)
+            if (uploadResult) {
+                const { transcribeQueue } = (global as any).__jobQueue || {};
+                if (transcribeQueue) {
+                    await transcribeQueue.add('transcribe', {
+                        recordingId: recording.id,
+                        meetingId: this.meetingId,
+                        orgId: (await this.prisma.meeting.findUnique({
+                            where: { id: this.meetingId },
+                            select: { orgId: true }
+                        }))?.orgId,
+                        storageKey,
+                        language: 'en'
+                    });
+                }
+            }
+
+            await this.logBot('INFO', 'recording.processed', 'Recording processed successfully');
 
         } catch (error) {
             console.error('Failed to process recording:', error);

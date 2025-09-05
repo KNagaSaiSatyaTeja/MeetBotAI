@@ -48,13 +48,15 @@ export class RecordingService extends EventEmitter {
 
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
+                console.log('⚠️  Recording stop timeout, force killing process');
                 this.forceKillProcess();
-                reject(new Error('Recording stop timeout'));
-            }, 5000);
+                resolve(this.outputPath); // Don't reject, just resolve with file path
+            }, 10000); // Increased timeout for better reliability
 
-            this.ffmpegProcess!.once('exit', () => {
+            this.ffmpegProcess!.once('exit', (code, signal) => {
                 clearTimeout(timeout);
                 this.isRecording = false;
+                console.log(`FFmpeg exited with code ${code}, signal ${signal}`);
                 resolve(this.outputPath);
             });
 
@@ -62,6 +64,7 @@ export class RecordingService extends EventEmitter {
             try {
                 this.ffmpegProcess!.stdin.write('q\n');
             } catch (error) {
+                console.log('⚠️  Could not send quit signal, force killing process');
                 this.forceKillProcess();
                 clearTimeout(timeout);
                 resolve(this.outputPath);

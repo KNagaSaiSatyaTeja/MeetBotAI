@@ -1,6 +1,6 @@
 import { Job } from 'bullmq';
 import { JobContext, JobStatus, updateJobStatus, incrementJobAttempts } from './queue';
-import { sttAdapter } from '../adapters/stt';
+import { whisperService } from '../services/whisperService';
 import { storageAdapter } from '../adapters/storage';
 
 export interface TranscribeJobData {
@@ -66,8 +66,16 @@ export async function transcribeHandler(job: Job<TranscribeJobData>, context: Jo
 
         console.log(`🔄 Transcribing file: ${fileUrl}`);
 
-        // Perform transcription
-        const transcriptionResult = await sttAdapter.transcribe(fileUrl, language);
+        // Perform transcription using Whisper
+        let transcriptionResult;
+        if (fileUrl.startsWith('file://')) {
+            // Local file
+            const localPath = fileUrl.replace('file://', '');
+            transcriptionResult = await whisperService.transcribeAudio(localPath, { language });
+        } else {
+            // Remote URL
+            transcriptionResult = await whisperService.transcribeFromUrl(fileUrl, { language });
+        }
 
         // Enhance transcript with speaker detection and formatting
         const enhancedResult = await enhanceTranscript(transcriptionResult, recording.meeting);
@@ -153,22 +161,38 @@ export async function transcribeHandler(job: Job<TranscribeJobData>, context: Jo
 }
 
 async function enhanceTranscript(result: any, meeting: any) {
-    // Add meeting context to speaker turns
-    const enhancedSpeakerTurns = result.speakerTurns.map((turn: any, index: number) => ({
-        ...turn,
-        speaker: turn.speaker || `Speaker ${index + 1}`,
-        confidence: turn.confidence || 0.9
-    }));
+    // Convert Whisper segments to speaker turns format
+    const speakerTurns = result.segments?.map((segment: any, index: number) => ({
+        speaker: `Speaker ${index + 1}`, // Whisper doesn't provide speaker identification
+        start: segment.start,
+        end: segment.end,
+        text: segment.text,
+        confidence: Math.max(0, Math.min(1, Math.exp(segment.avg_logprob))),
+        words: segment.tokens || []
+    })) || [];
 
-    // Add metadata
+    // Create words array from segments
+    const words = result.segments?.flatMap((segment: any) =>
+        segment.tokens?.map((token: any, index: number) => ({
+            word: token,
+            start: segment.start + (index * (segment.end - segment.start) / segment.tokens.length),
+            end: segment.start + ((index + 1) * (segment.end - segment.start) / segment.tokens.length),
+            confidence: Math.max(0, Math.min(1, Math.exp(segment.avg_logprob)))
+        })) || []
+    ) || [];
+
     return {
-        ...result,
-        speakerTurns: enhancedSpeakerTurns,
+        text: result.text,
+        language: result.language,
+        duration: result.duration,
+        words,
+        speakerTurns,
+        accuracy: result.confidence || 0.8,
         metadata: {
-            ...result.metadata,
             platform: meeting.platform,
             meetingTitle: meeting.title,
-            processedAt: new Date().toISOString()
+            processedAt: new Date().toISOString(),
+            whisperModel: 'whisper-1'
         }
     };
 }

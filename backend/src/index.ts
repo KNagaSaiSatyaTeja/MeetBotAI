@@ -14,9 +14,16 @@ import { webhooksRoutes } from './api/v1/webhooks';
 import { authRoutes } from './api/v1/auth';
 import { searchRoutes } from './api/v1/search';
 import { botRoutes } from './api/v1/bot';
+import { b2bRoutes } from './api/v1/b2b';
 
 // Job Queue
 import { setupQueue, injectJobContext } from './jobs/queue';
+
+// Services
+import { resourceManager } from './services/resourceManager';
+import { connectionPool } from './services/connectionPool';
+import { botManager } from './services/botManager';
+
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -157,6 +164,7 @@ async function buildApp() {
     await app.register(authRoutes, { prefix: '/v1' });
     await app.register(searchRoutes, { prefix: '/v1' });
     await app.register(botRoutes, { prefix: '/v1/bot' });
+    await app.register(b2bRoutes, { prefix: '/v1/b2b' });
 
     // Global error handler
     app.setErrorHandler(async (error, request, reply) => {
@@ -192,6 +200,8 @@ async function buildApp() {
             app.log.info(`Received ${signal}, shutting down gracefully...`);
 
             try {
+                await botManager.stop();
+                await connectionPool.close();
                 await jobQueue.close();
                 await redis.quit();
                 await prisma.$disconnect();
@@ -209,6 +219,12 @@ async function buildApp() {
 
 async function start() {
     try {
+        // Initialize services
+        console.log('🔧 Initializing services...');
+        await connectionPool.initialize();
+        await botManager.start();
+        console.log('✅ Services initialized');
+
         const app = await buildApp();
 
         await app.listen({
@@ -221,6 +237,7 @@ async function start() {
             app.log.info(`📚 API documentation at http://${HOST}:${PORT}/docs`);
         }
         app.log.info(`📊 Metrics endpoint at http://${HOST}:${process.env.METRICS_PORT || '9464'}/metrics`);
+        app.log.info(`🤖 Bot Manager: Ready for ${botManager.getBotStats().maxBots} concurrent bots`);
 
     } catch (error) {
         console.error('Failed to start server:', error);

@@ -1,11 +1,8 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { createMeetingBot } from '../../services/meetingBot';
+import { botManager } from '../../services/botManager';
 import { requireAuth, requireOrgAccess, requireScope } from '../../middleware/auth';
 import { ErrorResponseSchema } from './schemas';
 import { detectPlatform } from '../../utils/platform';
-
-// Store active bots
-const activeBots = new Map<string, any>();
 
 export async function botRoutes(fastify: FastifyInstance) {
 
@@ -68,16 +65,8 @@ export async function botRoutes(fastify: FastifyInstance) {
                 });
             }
 
-            // Check if bot is already active for this meeting
-            if (activeBots.has(detected.canonicalMeetingKey)) {
-                return reply.status(400).send({
-                    error: 'Bot already active',
-                    message: 'A bot is already active for this meeting',
-                    statusCode: 400
-                });
-            }
-
-            const { bot, meetingId } = await createMeetingBot(fastify.prisma, {
+            // Create bot using bot manager
+            const botId = await botManager.createBot({
                 meetingLink,
                 orgId,
                 title,
@@ -90,14 +79,8 @@ export async function botRoutes(fastify: FastifyInstance) {
                 }
             });
 
-            // Store bot instance
-            activeBots.set(detected.canonicalMeetingKey, bot);
-
-            // Clean up when meeting ends
-            bot.once('meeting.ended', () => {
-                activeBots.delete(detected.canonicalMeetingKey);
-                fastify.log.info({ meetingId }, 'Bot cleaned up after meeting ended');
-            });
+            const activeBot = botManager.getBot(botId);
+            const meetingId = activeBot?.meetingId;
 
             // Log audit event
             await fastify.prisma.auditLog.create({
@@ -107,6 +90,7 @@ export async function botRoutes(fastify: FastifyInstance) {
                     actorId: request.user.id,
                     action: 'bot.meeting.joined',
                     metaJson: {
+                        botId,
                         meetingId,
                         platform: detected.platform,
                         meetingLink
@@ -116,6 +100,7 @@ export async function botRoutes(fastify: FastifyInstance) {
 
             return reply.send({
                 success: true,
+                botId,
                 meetingId,
                 platform: detected.platform,
                 status: 'joining',
@@ -164,7 +149,12 @@ export async function botRoutes(fastify: FastifyInstance) {
 
         try {
             const detected = detectPlatform(meetingLink);
-            const bot = activeBots.get(detected.canonicalMeetingKey);
+
+            // Find bot by meeting link (this is a simplified approach)
+            // In production, you might want to store botId in the request or use a different lookup
+            const activeBots = Array.from(botManager.getBotStats().statusCounts);
+            const bot = Array.from(botManager['activeBots'].values())
+                .find(b => b.config.meetingLink === meetingLink);
 
             if (!bot) {
                 return reply.status(404).send({
@@ -174,8 +164,7 @@ export async function botRoutes(fastify: FastifyInstance) {
                 });
             }
 
-            await bot.leaveMeeting();
-            activeBots.delete(detected.canonicalMeetingKey);
+            await botManager.endBot(bot.id);
 
             return reply.send({
                 success: true,
@@ -200,53 +189,45 @@ export async function botRoutes(fastify: FastifyInstance) {
                 200: {
                     type: 'object',
                     properties: {
-                        activeBots: {
-                            type: 'array',
-                            items: {
-                                type: 'object',
-                                properties: {
-                                    meetingKey: { type: 'string' },
-                                    platform: { type: 'string' },
-                                    status: { type: 'string' },
-                                    startedAt: { type: 'string' }
+                        stats: {
+                            type: 'object',
+                            properties: {
+                                totalBots: { type: 'number' },
+                                maxBots: { type: 'number' },
+                                statusCounts: {
+                                    type: 'object',
+                                    properties: {
+                                        joining: { type: 'number' },
+                                        active: { type: 'number' },
+                                        ending: { type: 'number' },
+                                        failed: { type: 'number' }
+                                    }
+                                },
+                                resourceStats: {
+                                    type: 'object',
+                                    properties: {
+                                        activeBrowsers: { type: 'number' },
+                                        activeRecordings: { type: 'number' },
+                                        totalResources: { type: 'number' }
+                                    }
                                 }
                             }
-                        },
-                        totalActive: { type: 'number' }
+                        }
                     }
                 }
             },
             tags: ['Bot'],
-            summary: 'Get bot status',
+            summary: 'Get bot manager status',
             description: 'Returns information about currently active bots'
         }
     }, async (request: FastifyRequest, reply: FastifyReply) => {
         const { orgId } = request.user;
 
-        // Get active bots for this organization
-        const orgBots = await fastify.prisma.meetingsBot.findMany({
-            where: {
-                status: { in: ['JOINING', 'IN_MEETING', 'RECORDING'] },
-                meeting: { orgId }
-            },
-            include: {
-                meeting: {
-                    select: { platform: true, meetingLink: true }
-                }
-            },
-            orderBy: { startedAt: 'desc' }
-        });
-
-        const activeBotsList = orgBots.map(bot => ({
-            meetingKey: detectPlatform(bot.meeting.meetingLink || '').canonicalMeetingKey,
-            platform: bot.platform,
-            status: bot.status.toLowerCase(),
-            startedAt: bot.startedAt?.toISOString()
-        }));
+        // Get bot manager statistics
+        const stats = botManager.getBotStats();
 
         return reply.send({
-            activeBots: activeBotsList,
-            totalActive: activeBots.size
+            stats
         });
     });
 

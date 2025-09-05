@@ -54,6 +54,8 @@ model Meeting {
   title         String
   platform      String // zoom, google-meet, teams
   meetingLink   String?
+  webhookUrl    String?       // B2B webhook URL
+  metadata      Json          @default("{}") // Additional metadata
   scheduledAt   DateTime?
   startedAt     DateTime?
   endedAt       DateTime?
@@ -114,7 +116,9 @@ model Summary {
   id               String    @id @default(cuid())
   meetingId        String
   model            String    @default("gpt-4")
-  summaryText      String
+  content          String    // Main summary content
+  mom              String?   // Minutes of Meeting
+  keyPoints        Json      @default("[]") // Array of key points
   decisionsJson    Json      @default("[]")
   actionItemsJson  Json      @default("[]")
   participantsJson Json      @default("[]")

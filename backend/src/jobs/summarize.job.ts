@@ -68,7 +68,8 @@ export async function summarizeHandler(job: Job<SummarizeJobData>, context: JobC
             data: {
                 meetingId,
                 model: summaryResult.metadata?.model || 'unknown',
-                summaryText: summaryResult.summaryText,
+                content: summaryResult.summaryText,
+                keyPoints: summaryResult.keyPoints || [],
                 decisionsJson: summaryResult.decisions,
                 actionItemsJson: summaryResult.actionItems,
                 participantsJson: summaryResult.participants,
@@ -78,6 +79,14 @@ export async function summarizeHandler(job: Job<SummarizeJobData>, context: JobC
 
         // Generate and save Minutes of Meeting (MoM)
         const momData = await generateMinutesOfMeeting(summaryResult, transcript.meeting, transcript);
+
+        // Update summary with MOM
+        await context.prisma.summary.update({
+            where: { id: summary.id },
+            data: {
+                mom: momData.formattedSummary
+            }
+        });
 
         const mom = await context.prisma.meetingMOM.create({
             data: {
