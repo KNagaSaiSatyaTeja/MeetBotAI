@@ -8,6 +8,7 @@ export interface AuthUser {
   id: string
   email: string
   role: string
+  name?: string
 }
 
 interface AuthState {
@@ -16,9 +17,10 @@ interface AuthState {
   loading: boolean
   error: string | null
   login: (email: string, password: string) => Promise<void>
-  register: (email: string, password: string, organizationName: string) => Promise<void>
+  register: (email: string, password: string, name: string, companyName?: string) => Promise<void>
   fetchMe: () => Promise<void>
   logout: () => void
+  isAdmin: () => boolean
 }
 
 export const useAuth = create<AuthState>()(
@@ -40,10 +42,10 @@ export const useAuth = create<AuthState>()(
         }
       },
 
-      async register(email, password, organizationName) {
+      async register(email, password, name, companyName) {
         set({ loading: true, error: null })
         try {
-          await Api.register({ email, password, organizationName })
+          await Api.register({ email, password, name, companyName })
           // auto-login after register
           const res = await Api.login({ email, password })
           set({ token: res.token, user: res.user, loading: false })
@@ -67,6 +69,11 @@ export const useAuth = create<AuthState>()(
 
       logout() {
         set({ token: null, user: null })
+      },
+
+      isAdmin() {
+        const user = get().user
+        return user?.role === 'ADMIN'
       },
     }),
     { name: 'auth-store' }

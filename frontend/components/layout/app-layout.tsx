@@ -10,7 +10,7 @@ interface AppLayoutProps {
 }
 
 export function AppLayout({ children }: AppLayoutProps) {
-  const { user, logout } = useAuth()
+  const { user, logout, isAdmin } = useAuth()
   const router = useRouter()
   useEffect(() => {
     if (!user) {
@@ -42,6 +42,10 @@ export function AppLayout({ children }: AppLayoutProps) {
               <span className="mr-3">🎥</span>
               Meetings
             </a>
+            <a href="/api-management" className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50">
+              <span className="mr-3">🔑</span>
+              API Tokens
+            </a>
             <a href="/search" className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50">
               <span className="mr-3">🔍</span>
               Search
@@ -50,10 +54,33 @@ export function AppLayout({ children }: AppLayoutProps) {
               <span className="mr-3">⚙️</span>
               Settings
             </a>
-            <a href="/analytics" className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50">
-              <span className="mr-3">📈</span>
-              Analytics
-            </a>
+            
+            {/* Admin-only navigation */}
+            {isAdmin() && (
+              <>
+                <div className="pt-4 pb-2">
+                  <div className="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Admin
+                  </div>
+                </div>
+                <a href="/admin" className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50">
+                  <span className="mr-3">👑</span>
+                  Admin Dashboard
+                </a>
+                <a href="/admin/users" className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50">
+                  <span className="mr-3">👥</span>
+                  User Management
+                </a>
+                <a href="/admin/monitoring" className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50">
+                  <span className="mr-3">📊</span>
+                  System Monitor
+                </a>
+                <a href="/admin/health" className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50">
+                  <span className="mr-3">💚</span>
+                  Health Check
+                </a>
+              </>
+            )}
           </nav>
 
           {/* User section */}

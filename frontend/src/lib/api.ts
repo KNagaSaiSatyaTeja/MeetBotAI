@@ -49,8 +49,8 @@ export async function apiFetch<T = any>(path: string, options: ApiRequestOptions
 
 export const Api = {
   // Auth
-  register(input: { email: string; password: string; organizationName: string }) {
-    return apiFetch<{ success: boolean } & any>('/v1/register', { method: 'POST', body: input });
+  register(input: { email: string; password: string; name: string; companyName?: string }) {
+    return apiFetch<{ success: boolean; user: any }>('/v1/register', { method: 'POST', body: input });
   },
   login(input: { email: string; password: string }) {
     return apiFetch<{ token: string; user: any }>('/v1/login', { method: 'POST', body: input });
@@ -75,21 +75,52 @@ export const Api = {
   getMeeting(token: string, id: string) {
     return apiFetch(`/v1/meetings/${id}`, { token });
   },
+  createMeeting(token: string, input: { title: string; platform: string; meetingLink?: string; scheduledAt?: string }) {
+    return apiFetch('/v1/meetings', { method: 'POST', token, body: input });
+  },
 
   // Search
   search(token: string, q: string) {
     return apiFetch(`/v1/search?q=${encodeURIComponent(q)}`, { token });
   },
 
-  // API Keys
-  listApiKeys(token: string) {
-    return apiFetch('/v1/api-keys', { token });
+  // API Tokens (User)
+  listTokens(token: string) {
+    return apiFetch('/v1/tokens', { token });
   },
-  createApiKey(token: string, input: { label: string; scopes: string[] }) {
-    return apiFetch('/v1/api-keys', { method: 'POST', token, body: input });
+  createToken(token: string, input: { label: string }) {
+    return apiFetch('/v1/tokens', { method: 'POST', token, body: input });
   },
-  revokeApiKey(token: string, id: string) {
-    return apiFetch(`/v1/api-keys/${id}`, { method: 'DELETE', token });
+  revokeToken(token: string, id: string) {
+    return apiFetch(`/v1/tokens/${id}`, { method: 'DELETE', token });
+  },
+
+  // Admin endpoints
+  admin: {
+    listUsers(token: string) {
+      return apiFetch('/v1/admin/users', { token });
+    },
+    updateUserStatus(token: string, userId: string, isActive: boolean) {
+      return apiFetch(`/v1/admin/users/${userId}/status`, { method: 'PATCH', token, body: { isActive } });
+    },
+    listMeetings(token: string) {
+      return apiFetch('/v1/admin/meetings', { token });
+    },
+    revokeToken(token: string, tokenId: string) {
+      return apiFetch(`/v1/admin/tokens/${tokenId}`, { method: 'DELETE', token });
+    },
+    getLogs(token: string, params?: { limit?: number; offset?: number }) {
+      const qs = params
+        ? '?' + Object.entries(params)
+            .filter(([, v]) => v !== undefined)
+            .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+            .join('&')
+        : '';
+      return apiFetch(`/v1/admin/logs${qs}`, { token });
+    },
+    getHealth(token: string) {
+      return apiFetch('/v1/admin/health', { token });
+    },
   },
 };
 

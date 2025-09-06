@@ -10,11 +10,12 @@ export default function RegisterPage() {
   const { register: registerUser, loading, error } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [organizationName, setOrganizationName] = useState('')
+  const [name, setName] = useState('')
+  const [companyName, setCompanyName] = useState('')
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
-    await registerUser(email, password, organizationName)
+    await registerUser(email, password, name, companyName)
     router.replace('/')
   }
 
@@ -30,12 +31,16 @@ export default function RegisterPage() {
 
         <form onSubmit={onSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Organization Name</label>
-            <input value={organizationName} onChange={e=>setOrganizationName(e.target.value)} required className="w-full border rounded-md px-3 py-2" placeholder="Acme Inc" />
+            <label className="block text-sm font-medium mb-1">Full Name</label>
+            <input value={name} onChange={e=>setName(e.target.value)} required className="w-full border rounded-md px-3 py-2" placeholder="John Doe" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Email</label>
             <input value={email} onChange={e=>setEmail(e.target.value)} type="email" required className="w-full border rounded-md px-3 py-2" placeholder="you@example.com" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Company Name (Optional)</label>
+            <input value={companyName} onChange={e=>setCompanyName(e.target.value)} className="w-full border rounded-md px-3 py-2" placeholder="Acme Inc" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Password</label>
