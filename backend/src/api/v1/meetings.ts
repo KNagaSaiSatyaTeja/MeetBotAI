@@ -15,28 +15,28 @@ import { requireAuth, requireOrgAccess } from '../../middleware/auth';
 export async function meetingsRoutes(fastify: FastifyInstance) {
     // Create meeting
     fastify.post('/meetings', {
-        preHandler: [requireAuth, requireOrgAccess],
+        preHandler: [requireAuth],
         schema: {
             body: CreateMeetingSchema,
             response: {
                 201: MeetingResponseSchema,
                 400: ErrorResponseSchema,
                 401: ErrorResponseSchema,
-                403: ErrorResponseSchema,
             },
             tags: ['Meetings'],
             summary: 'Create a new meeting',
-            description: 'Creates a new meeting record for the organization',
+            description: 'Creates a new meeting record for the user',
         },
     }, async (request: FastifyRequest<{ Body: any }>, reply: FastifyReply) => {
-        const { orgId } = request.user;
+        const { id: userId, orgId } = request.user;
         const meetingData = request.body;
 
         try {
             const meeting = await fastify.prisma.meeting.create({
                 data: {
                     ...meetingData,
-                    orgId,
+                    userId,
+                    orgId: orgId || null,
                     status: 'SCHEDULED',
                 },
                 include: {
@@ -69,7 +69,7 @@ export async function meetingsRoutes(fastify: FastifyInstance) {
 
     // Get meeting by ID
     fastify.get('/meetings/:id', {
-        preHandler: [requireAuth, requireOrgAccess],
+        preHandler: [requireAuth],
         schema: {
             params: IdParamSchema,
             querystring: MeetingQuerySchema,
@@ -89,11 +89,14 @@ export async function meetingsRoutes(fastify: FastifyInstance) {
     }>, reply: FastifyReply) => {
         const { id } = request.params;
         const { record, audio, video } = request.query;
-        const { orgId } = request.user;
+        const { id: userId, role } = request.user;
 
         try {
+            // Admin can see all meetings, users can only see their own
+            const whereClause = role === 'ADMIN' ? { id } : { id, userId };
+            
             const meeting = await fastify.prisma.meeting.findFirst({
-                where: { id, orgId },
+                where: whereClause,
                 include: {
                     recordings: record,
                     transcripts: record,
@@ -271,25 +274,24 @@ export async function meetingsRoutes(fastify: FastifyInstance) {
 
     // List meetings with search and filters
     fastify.get('/meetings', {
-        preHandler: [requireAuth, requireOrgAccess],
+        preHandler: [requireAuth],
         schema: {
             querystring: SearchQuerySchema,
             response: {
                 200: PaginatedResponseSchema,
                 401: ErrorResponseSchema,
-                403: ErrorResponseSchema,
             },
             tags: ['Meetings'],
             summary: 'List meetings',
             description: 'Lists meetings with optional search and filtering',
         },
     }, async (request: FastifyRequest<{ Querystring: typeof SearchQuerySchema._type }>, reply: FastifyReply) => {
-        const { orgId } = request.user;
+        const { id: userId, role } = request.user;
         const { search, platform, status, dateFrom, dateTo, cursor, limit } = request.query;
 
         try {
-            // Build where clause
-            const where: any = { orgId };
+            // Build where clause - Admin can see all meetings, users only their own
+            const where: any = role === 'ADMIN' ? {} : { userId };
 
             if (search) {
                 where.OR = [

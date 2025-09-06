@@ -100,9 +100,10 @@ export async function authRoutes(fastify: FastifyInstance) {
                 properties: {
                     email: { type: 'string', format: 'email' },
                     password: { type: 'string', minLength: 8 },
-                    organizationName: { type: 'string', minLength: 1 },
+                    name: { type: 'string', minLength: 1 },
+                    companyName: { type: 'string' },
                 },
-                required: ['email', 'password', 'organizationName'],
+                required: ['email', 'password', 'name'],
             },
             response: {
                 201: {
@@ -118,13 +119,7 @@ export async function authRoutes(fastify: FastifyInstance) {
                                 role: { type: 'string' },
                             },
                         },
-                        organization: {
-                            type: 'object',
-                            properties: {
-                                id: { type: 'string' },
-                                name: { type: 'string' },
-                            },
-                        },
+                        message: { type: 'string' },
                     },
                 },
                 400: ErrorResponseSchema,
@@ -135,7 +130,7 @@ export async function authRoutes(fastify: FastifyInstance) {
             description: 'Creates a new user account and organization',
         },
     }, async (request: FastifyRequest<{ Body: any }>, reply: FastifyReply) => {
-        const { email, password, organizationName } = request.body;
+        const { email, password, name, companyName } = request.body;
 
         try {
             // Check if user already exists
@@ -147,36 +142,19 @@ export async function authRoutes(fastify: FastifyInstance) {
                 return reply.status(409).send({ error: 'User already exists' });
             }
 
-            // Create organization
-            const organization = await fastify.prisma.organization.create({
-                data: {
-                    name: organizationName,
-                    plan: 'free',
-                    region: 'us',
-                    retentionDays: 30,
-                },
-            });
-
             // Hash password
             const hashedPassword = await bcrypt.hash(password, 12);
 
-            // Create user
+            // Create user (no organization by default)
             const user = await fastify.prisma.user.create({
                 data: {
-                    orgId: organization.id,
                     email,
-                    role: 'ADMIN',
+                    passwordHash: hashedPassword,
+                    name,
+                    companyName: companyName || null,
+                    role: 'USER', // Default role is USER, not ADMIN
                     provider: 'email',
-                    consentFlags: {},
-                },
-            });
-
-            // Store hashed password in a separate table or field
-            // For now, we'll store it in consentFlags (not ideal, but works for demo)
-            await fastify.prisma.user.update({
-                where: { id: user.id },
-                data: {
-                    consentFlags: { passwordHash: hashedPassword },
+                    isActive: true,
                 },
             });
 
@@ -187,10 +165,6 @@ export async function authRoutes(fastify: FastifyInstance) {
                     id: user.id,
                     email: user.email,
                     role: user.role,
-                },
-                organization: {
-                    id: organization.id,
-                    name: organization.name,
                 },
             });
         } catch (error: any) {
@@ -251,18 +225,17 @@ export async function authRoutes(fastify: FastifyInstance) {
                 },
             });
 
-            if (!user) {
+            if (!user || !user.isActive) {
                 return reply.status(401).send({ error: 'Invalid credentials' });
             }
 
-            // Get password hash from consentFlags
-            const passwordHash = (user.consentFlags as any)?.passwordHash;
-            if (!passwordHash) {
+            // Get password hash from passwordHash field
+            if (!user.passwordHash) {
                 return reply.status(401).send({ error: 'Invalid credentials' });
             }
 
             // Verify password
-            const isValidPassword = await bcrypt.compare(password, passwordHash);
+            const isValidPassword = await bcrypt.compare(password, user.passwordHash);
             if (!isValidPassword) {
                 return reply.status(401).send({ error: 'Invalid credentials' });
             }
@@ -272,6 +245,7 @@ export async function authRoutes(fastify: FastifyInstance) {
                 {
                     sub: user.id,
                     orgId: user.orgId,
+                    role: user.role,
                     iat: Math.floor(Date.now() / 1000),
                 },
                 process.env.JWT_SECRET || 'your-secret-key',
@@ -286,6 +260,7 @@ export async function authRoutes(fastify: FastifyInstance) {
                     id: user.id,
                     email: user.email,
                     role: user.role,
+                    name: user.name,
                 },
             });
         } catch (error) {
@@ -295,84 +270,70 @@ export async function authRoutes(fastify: FastifyInstance) {
         }
     });
 
-    // Create API key
-    fastify.post('/api-keys', {
-        preHandler: [requireAuth, requireOrgAccess],
+    // Create API token for user
+    fastify.post('/tokens', {
+        preHandler: [requireAuth],
         schema: {
-            body: CreateApiKeySchema,
+            body: {
+                type: 'object',
+                properties: {
+                    label: { type: 'string', minLength: 1 },
+                },
+                required: ['label'],
+            },
             response: {
                 201: {
                     type: 'object',
                     properties: {
                         id: { type: 'string' },
-                        key: { type: 'string' },
+                        token: { type: 'string' },
                         label: { type: 'string' },
-                        scopes: { type: 'array', items: { type: 'string' } },
                         createdAt: { type: 'string' },
                     },
                 },
                 400: ErrorResponseSchema,
                 401: ErrorResponseSchema,
-                403: ErrorResponseSchema,
             },
             tags: ['Authentication'],
-            summary: 'Create API key',
-            description: 'Creates a new API key for programmatic access',
+            summary: 'Create API token',
+            description: 'Creates a new API token for programmatic access',
         },
-    }, async (request: FastifyRequest<{ Body: typeof CreateApiKeySchema._type }>, reply: FastifyReply) => {
-        const { orgId } = request.user;
-        const { label, scopes } = request.body;
+    }, async (request: FastifyRequest<{ Body: { label: string } }>, reply: FastifyReply) => {
+        const { label } = request.body;
 
         try {
-            // Generate API key
-            const keyPrefix = 'sk-';
-            const keyBody = crypto.randomBytes(32).toString('hex');
-            const apiKey = `${keyPrefix}${keyBody}`;
+            // Generate API token
+            const tokenPrefix = 'mbt_';
+            const tokenBody = crypto.randomBytes(32).toString('hex');
+            const apiToken = `${tokenPrefix}${tokenBody}`;
 
-            // Hash the key for storage
-            const hash = await bcrypt.hash(apiKey, 12);
+            // Hash the token for storage
+            const hash = await bcrypt.hash(apiToken, 12);
 
-            const apiKeyRecord = await fastify.prisma.apiKey.create({
+            const tokenRecord = await fastify.prisma.apiToken.create({
                 data: {
-                    orgId,
-                    hash,
+                    userId: request.user.id,
+                    token: hash,
                     label,
-                    scopes,
-                },
-            });
-
-            // Log audit event
-            await fastify.prisma.auditLog.create({
-                data: {
-                    orgId,
-                    actorType: 'USER',
-                    actorId: request.user.id,
-                    action: 'api_key.created',
-                    metaJson: {
-                        apiKeyId: apiKeyRecord.id,
-                        label,
-                        scopes,
-                        keyPrefix: `${keyPrefix}****${keyBody.slice(-4)}`,
-                    },
+                    status: 'active',
                 },
             });
 
             return reply.status(201).send({
-                id: apiKeyRecord.id,
-                key: apiKey, // Only return the actual key on creation
-                label: apiKeyRecord.label,
-                scopes: apiKeyRecord.scopes,
-                createdAt: apiKeyRecord.createdAt.toISOString(),
+                id: tokenRecord.id,
+                token: apiToken, // Only return the actual token on creation
+                label: tokenRecord.label,
+                createdAt: tokenRecord.createdAt.toISOString(),
             });
         } catch (error) {
-            fastify.log.error(error, 'Failed to create API key');
-            throw fastify.httpErrors.internalServerError('Failed to create API key');
+            fastify.log.error(error, 'Failed to create API token');
+            throw fastify.httpErrors.internalServerError('Failed to create API token');
         }
     });
 
-    // List API keys
-    fastify.get('/api-keys', {
-        preHandler: [requireAuth, requireOrgAccess],
+    // List API tokens for user
+    fastify.get('/tokens', {
+        preHandler: [requireAuth],
         schema: {
             response: {
                 200: {
@@ -382,7 +343,7 @@ export async function authRoutes(fastify: FastifyInstance) {
                         properties: {
                             id: { type: 'string' },
                             label: { type: 'string' },
-                            scopes: { type: 'array', items: { type: 'string' } },
+                            status: { type: 'string' },
                             lastUsedAt: { type: 'string', nullable: true },
                             createdAt: { type: 'string' },
                             updatedAt: { type: 'string' },
@@ -390,96 +351,78 @@ export async function authRoutes(fastify: FastifyInstance) {
                     },
                 },
                 401: ErrorResponseSchema,
-                403: ErrorResponseSchema,
             },
             tags: ['Authentication'],
-            summary: 'List API keys',
-            description: 'Lists all API keys for the organization',
+            summary: 'List API tokens',
+            description: 'Lists all API tokens for the user',
         },
     }, async (request: FastifyRequest, reply: FastifyReply) => {
-        const { orgId } = request.user;
-
         try {
-            const apiKeys = await fastify.prisma.apiKey.findMany({
-                where: { orgId },
+            const apiTokens = await fastify.prisma.apiToken.findMany({
+                where: { userId: request.user.id },
                 select: {
                     id: true,
                     label: true,
-                    scopes: true,
+                    status: true,
                     lastUsedAt: true,
                     createdAt: true,
                     updatedAt: true,
-                    // Don't select hash for security
+                    // Don't select token hash for security
                 },
                 orderBy: { createdAt: 'desc' },
             });
 
             return reply.send(
-                apiKeys.map(key => ({
-                    ...key,
-                    lastUsedAt: key.lastUsedAt?.toISOString() || null,
-                    createdAt: key.createdAt.toISOString(),
-                    updatedAt: key.updatedAt.toISOString(),
+                apiTokens.map(token => ({
+                    ...token,
+                    lastUsedAt: token.lastUsedAt?.toISOString() || null,
+                    createdAt: token.createdAt.toISOString(),
+                    updatedAt: token.updatedAt.toISOString(),
                 }))
             );
         } catch (error) {
-            fastify.log.error(error, 'Failed to list API keys');
-            throw fastify.httpErrors.internalServerError('Failed to list API keys');
+            fastify.log.error(error, 'Failed to list API tokens');
+            throw fastify.httpErrors.internalServerError('Failed to list API tokens');
         }
     });
 
-    // Revoke API key
-    fastify.delete('/api-keys/:id', {
-        preHandler: [requireAuth, requireOrgAccess],
+    // Revoke API token
+    fastify.delete('/tokens/:id', {
+        preHandler: [requireAuth],
         schema: {
             params: IdParamSchema,
             response: {
                 204: { type: 'null' },
                 404: ErrorResponseSchema,
                 401: ErrorResponseSchema,
-                403: ErrorResponseSchema,
             },
             tags: ['Authentication'],
-            summary: 'Revoke API key',
-            description: 'Revokes an API key, making it unusable',
+            summary: 'Revoke API token',
+            description: 'Revokes an API token, making it unusable',
         },
     }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
         const { id } = request.params;
-        const { orgId } = request.user;
 
         try {
-            // Verify API key exists and belongs to org
-            const apiKey = await fastify.prisma.apiKey.findFirst({
-                where: { id, orgId },
+            // Verify API token exists and belongs to user
+            const apiToken = await fastify.prisma.apiToken.findFirst({
+                where: { id, userId: request.user.id },
             });
 
-            if (!apiKey) {
-                throw fastify.httpErrors.notFound('API key not found');
+            if (!apiToken) {
+                throw fastify.httpErrors.notFound('API token not found');
             }
 
-            await fastify.prisma.apiKey.delete({
+            await fastify.prisma.apiToken.update({
                 where: { id },
-            });
-
-            // Log audit event
-            await fastify.prisma.auditLog.create({
-                data: {
-                    orgId,
-                    actorType: 'USER',
-                    actorId: request.user.id,
-                    action: 'api_key.revoked',
-                    metaJson: {
-                        apiKeyId: id,
-                        label: apiKey.label,
-                    },
-                },
+                data: { status: 'revoked' },
             });
 
             return reply.status(204).send();
         } catch (error) {
             if (error.statusCode) throw error;
-            fastify.log.error(error, 'Failed to revoke API key');
-            throw fastify.httpErrors.internalServerError('Failed to revoke API key');
+            fastify.log.error(error, 'Failed to revoke API token');
+            throw fastify.httpErrors.internalServerError('Failed to revoke API token');
         }
     });
 

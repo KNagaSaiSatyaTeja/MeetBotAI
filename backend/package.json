@@ -26,6 +26,8 @@
         "test:supabase": "tsx src/test-supabase.ts",
         "test:manual": "tsx src/test-zoom-manual.ts",
         "test:live": "tsx src/test-live-meeting.ts",
+        "db:setup": "tsx scripts/setup-database.ts",
+        "dev:setup": "tsx scripts/setup-dev.ts",
         "docker:build": "docker build -t meetingbot-api .",
         "docker:run": "docker-compose -f docker-compose.prod.yml up -d",
         "docker:stop": "docker-compose -f docker-compose.prod.yml down",
@@ -39,6 +41,7 @@
         "@fastify/helmet": "^11.1.1",
         "@fastify/multipart": "^8.0.0",
         "@fastify/rate-limit": "^9.1.0",
+        "@fastify/sensible": "^4.1.0",
         "@fastify/swagger": "^8.14.0",
         "@fastify/swagger-ui": "^2.1.0",
         "@opentelemetry/api": "^1.7.0",
@@ -51,6 +54,7 @@
         "bullmq": "^4.15.4",
         "dotenv": "^17.2.2",
         "fastify": "^4.25.2",
+        "ffmpeg-static": "^5.2.0",
         "ioredis": "^5.3.2",
         "jose": "^6.1.0",
         "jsonwebtoken": "^9.0.2",
@@ -59,7 +63,6 @@
         "pino": "^8.17.2",
         "pino-pretty": "^10.3.1",
         "puppeteer": "^22.10.0",
-        "ffmpeg-static": "^5.2.0",
         "zod": "^3.22.4"
     },
     "devDependencies": {

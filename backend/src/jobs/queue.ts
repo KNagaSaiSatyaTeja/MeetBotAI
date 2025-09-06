@@ -77,7 +77,10 @@ export async function setupQueue(redis: Redis): Promise<{
         });
 
         worker.on('error', (err) => {
-            console.error('Worker error:', err);
+            // Only log non-connection errors to avoid spam
+            if (!err.message.includes('ECONNREFUSED') && !err.message.includes('connect')) {
+                console.error('Worker error:', err);
+            }
         });
     });
 

@@ -12,6 +12,7 @@ import { observabilityMiddleware } from './middleware/observability';
 import { meetingsRoutes } from './api/v1/meetings';
 import { webhooksRoutes } from './api/v1/webhooks';
 import { authRoutes } from './api/v1/auth';
+import { adminRoutes } from './api/v1/admin';
 import { searchRoutes } from './api/v1/search';
 import { botRoutes } from './api/v1/bot';
 
@@ -51,22 +52,51 @@ async function buildApp() {
         log: NODE_ENV === 'development' ? ['query', 'info', 'warn', 'error'] : ['warn', 'error'],
     });
 
-    const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-        maxRetriesPerRequest: null,
-        lazyConnect: true,
-    });
+    // Initialize Redis (optional for basic functionality)
+    let redis: Redis | null = null;
+    let jobQueue: any = null;
 
-    // Setup job queue
-    const jobQueue = await setupQueue(redis);
+    try {
+        redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+            maxRetriesPerRequest: null,
+            lazyConnect: true,
+            retryDelayOnFailover: 100,
+            connectTimeout: 5000,
+            enableReadyCheck: false,
+        });
 
-    // Inject job context
-    injectJobContext(jobQueue, { redis, prisma });
-    (global as any).__jobQueue = jobQueue;
+        // Test Redis connection with timeout
+        await Promise.race([
+            redis.ping(),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Connection timeout')), 3000)
+            )
+        ]);
+        
+        logger.info('Redis connected successfully');
+
+        // Setup job queue
+        jobQueue = await setupQueue(redis);
+        injectJobContext(jobQueue, { redis, prisma });
+        (global as any).__jobQueue = jobQueue;
+        
+        logger.info('Job queue initialized');
+    } catch (error) {
+        logger.warn('Redis connection failed - running without background jobs');
+        if (redis) {
+            redis.disconnect();
+            redis = null;
+        }
+        jobQueue = null;
+    }
 
     // Add services to fastify context
     app.decorate('prisma', prisma);
     app.decorate('redis', redis);
     app.decorate('jobQueue', jobQueue);
+
+    // Register error handling
+    await app.register(require('@fastify/sensible'));
 
     // Register plugins
     await app.register(require('@fastify/helmet'), {
@@ -155,6 +185,7 @@ async function buildApp() {
     await app.register(meetingsRoutes, { prefix: '/v1' });
     await app.register(webhooksRoutes, { prefix: '/v1' });
     await app.register(authRoutes, { prefix: '/v1' });
+    await app.register(adminRoutes, { prefix: '/v1/admin' });
     await app.register(searchRoutes, { prefix: '/v1' });
     await app.register(botRoutes, { prefix: '/v1/bot' });
 
@@ -192,8 +223,12 @@ async function buildApp() {
             app.log.info(`Received ${signal}, shutting down gracefully...`);
 
             try {
-                await jobQueue.close();
-                await redis.quit();
+                if (jobQueue) {
+                    await jobQueue.close();
+                }
+                if (redis) {
+                    await redis.quit();
+                }
                 await prisma.$disconnect();
                 await app.close();
                 process.exit(0);

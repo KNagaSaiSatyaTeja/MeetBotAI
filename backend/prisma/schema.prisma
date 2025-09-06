@@ -13,17 +13,26 @@ datasource db {
 
 model User {
   id           String   @id @default(cuid())
-  orgId        String
+  orgId        String?  // Optional for individual users
   role         UserRole @default(USER)
   email        String   @unique
-  provider     String // google, microsoft, etc.
+  passwordHash String?  // Direct password storage
+  name         String?
+  companyName  String?
+  provider     String   @default("email") // email, google, microsoft, zoom
+  oauthTokens  Json     @default("{}")
   consentFlags Json     @default("{}")
+  isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   // Relations
-  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  meetings     Meeting[]
+  apiTokens    ApiToken[]
+  webhooks     Webhook[]
   auditLogs    AuditLog[]
+  adminLogs    AdminLog[]    @relation("AdminLogs")
 
   @@map("users")
 }
@@ -50,9 +59,10 @@ model Organization {
 
 model Meeting {
   id            String        @id @default(cuid())
-  orgId         String
+  userId        String        // Owner of the meeting
+  orgId         String?       // Optional organization
   title         String
-  platform      String // zoom, google-meet, teams
+  platform      String        // zoom, google-meet, teams
   meetingLink   String?
   scheduledAt   DateTime?
   startedAt     DateTime?
@@ -63,7 +73,8 @@ model Meeting {
   updatedAt     DateTime      @updatedAt
 
   // Relations
-  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: SetNull)
   recordings   Recording[]
   transcripts  Transcript[]
   summaries    Summary[]
@@ -218,6 +229,23 @@ model Job {
   @@map("jobs")
 }
 
+// User API tokens for B2B integration
+model ApiToken {
+  id         String   @id @default(cuid())
+  userId     String
+  token      String   @unique // The actual token (hashed)
+  label      String?
+  status     String   @default("active") // active, revoked
+  lastUsedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("api_tokens")
+}
+
 model ApiKey {
   id         String   @id @default(cuid())
   orgId      String
@@ -252,16 +280,18 @@ model AuditLog {
 
 model Webhook {
   id        String   @id @default(cuid())
-  orgId     String
+  userId    String   // User who owns this webhook
+  orgId     String?  // Optional organization
   url       String
-  secret    String // HMAC secret
+  secret    String   // HMAC secret
   events    String[] @default([]) // meeting.processed, meeting.failed, etc.
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
-  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: SetNull)
   deliveries   WebhookDelivery[]
 
   @@map("webhooks")
@@ -284,6 +314,22 @@ model WebhookDelivery {
   webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@map("webhook_deliveries")
+}
+
+// Admin action logs
+model AdminLog {
+  id              String    @id @default(cuid())
+  adminId         String    // Admin user who performed the action
+  action          String    // Action performed
+  targetUserId    String?   // Target user (if applicable)
+  targetMeetingId String?   // Target meeting (if applicable)
+  metaJson        Json      @default("{}")
+  createdAt       DateTime  @default(now())
+
+  // Relations
+  admin User @relation("AdminLogs", fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@map("admin_logs")
 }
 
 // Enums
