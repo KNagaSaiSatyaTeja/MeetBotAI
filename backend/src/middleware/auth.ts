@@ -10,7 +10,7 @@ declare module 'fastify' {
             orgId: string;
             role: string;
             email: string;
-            type: 'user' | 'api_key';
+            type: 'user' | 'api_key' | 'api_token';
             scopes?: string[];
         };
     }
@@ -21,15 +21,21 @@ export async function authMiddleware(fastify: FastifyInstance) {
     fastify.decorateRequest('user', null);
 }
 
-// Authentication middleware - validates API key or JWT token
+// Authentication middleware - validates API token, API key, or JWT token
 export async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
     const apiKey = request.headers['x-api-key'] as string;
     const authHeader = request.headers.authorization as string;
 
     try {
         if (apiKey) {
-            // API Key authentication
-            await authenticateApiKey(request, reply, apiKey);
+            // Check if it's a user API token or organization API key
+            if (apiKey.startsWith('mbt_')) {
+                // User API token authentication
+                await authenticateApiToken(request, reply, apiKey);
+            } else {
+                // Organization API Key authentication
+                await authenticateApiKey(request, reply, apiKey);
+            }
         } else if (authHeader && authHeader.startsWith('Bearer ')) {
             // JWT authentication
             const token = authHeader.substring(7);
@@ -97,6 +103,67 @@ export function requireScope(requiredScope: string) {
             }
         }
     };
+}
+
+// Helper function to authenticate user API token
+async function authenticateApiToken(request: FastifyRequest, reply: FastifyReply, apiToken: string) {
+    if (!apiToken.startsWith('mbt_') || apiToken.length < 10) {
+        throw request.server.httpErrors.unauthorized('Invalid API token format');
+    }
+
+    // Find API token by hash
+    const tokens = await request.server.prisma.apiToken.findMany({
+        where: { status: 'active' },
+        include: {
+            user: {
+                select: {
+                    id: true,
+                    email: true,
+                    name: true,
+                    role: true,
+                    isActive: true,
+                },
+            },
+        },
+    });
+
+    let matchedToken = null;
+
+    // Check each API token hash (constant time comparison)
+    for (const token of tokens) {
+        const isValid = await bcrypt.compare(apiToken, token.token);
+        if (isValid) {
+            matchedToken = token;
+            break;
+        }
+    }
+
+    if (!matchedToken || !matchedToken.user.isActive) {
+        throw request.server.httpErrors.unauthorized('Invalid API token');
+    }
+
+    // Update last used timestamp
+    await request.server.prisma.apiToken.update({
+        where: { id: matchedToken.id },
+        data: { lastUsedAt: new Date() },
+    });
+
+    // Set user context
+    request.user = {
+        id: matchedToken.user.id,
+        orgId: matchedToken.user.orgId || '',
+        role: matchedToken.user.role,
+        email: matchedToken.user.email,
+        type: 'api_token',
+    };
+
+    // Log API token usage
+    request.log.info({
+        tokenId: matchedToken.id,
+        userId: matchedToken.user.id,
+        userEmail: matchedToken.user.email,
+        label: matchedToken.label,
+    }, 'API token authentication successful');
 }
 
 // Helper function to authenticate API key
