@@ -31,22 +31,49 @@ export default function RegisterPage() {
 
         <form onSubmit={onSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Full Name</label>
-            <input value={name} onChange={e=>setName(e.target.value)} required className="w-full border rounded-md px-3 py-2" placeholder="John Doe" />
+            <label className="block text-sm font-medium text-gray-700 mb-2">Full Name</label>
+            <input 
+              value={name} 
+              onChange={e=>setName(e.target.value)} 
+              required 
+              className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" 
+              placeholder="John Doe" 
+            />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Email</label>
-            <input value={email} onChange={e=>setEmail(e.target.value)} type="email" required className="w-full border rounded-md px-3 py-2" placeholder="you@example.com" />
+            <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+            <input 
+              value={email} 
+              onChange={e=>setEmail(e.target.value)} 
+              type="email" 
+              required 
+              className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" 
+              placeholder="you@example.com" 
+            />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Company Name (Optional)</label>
-            <input value={companyName} onChange={e=>setCompanyName(e.target.value)} className="w-full border rounded-md px-3 py-2" placeholder="Acme Inc" />
+            <label className="block text-sm font-medium text-gray-700 mb-2">Company Name (Optional)</label>
+            <input 
+              value={companyName} 
+              onChange={e=>setCompanyName(e.target.value)} 
+              className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" 
+              placeholder="Acme Inc" 
+            />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Password</label>
-            <input value={password} onChange={e=>setPassword(e.target.value)} type="password" required className="w-full border rounded-md px-3 py-2" placeholder="••••••••" />
+            <label className="block text-sm font-medium text-gray-700 mb-2">Password</label>
+            <input 
+              value={password} 
+              onChange={e=>setPassword(e.target.value)} 
+              type="password" 
+              required 
+              className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" 
+              placeholder="••••••••" 
+            />
           </div>
-          <button disabled={loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-md py-2 font-medium disabled:opacity-60">{loading ? 'Creating...' : 'Create Account'}</button>
+          <button disabled={loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-3 font-medium disabled:opacity-60 transition-colors">
+            {loading ? 'Creating...' : 'Create Account'}
+          </button>
         </form>
 
         <div className="my-4 flex items-center"><div className="flex-1 h-px bg-gray-200"/><span className="px-2 text-xs text-gray-500">OR CONTINUE WITH</span><div className="flex-1 h-px bg-gray-200"/></div>
