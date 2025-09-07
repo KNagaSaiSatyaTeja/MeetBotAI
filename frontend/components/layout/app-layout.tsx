@@ -42,6 +42,14 @@ export function AppLayout({ children }: AppLayoutProps) {
               <span className="mr-3">🎥</span>
               Meetings
             </a>
+            <a href="/bots" className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50">
+              <span className="mr-3">🤖</span>
+              Bot Management
+            </a>
+            <a href="/analytics" className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50">
+              <span className="mr-3">📈</span>
+              Analytics
+            </a>
             <a href="/api-management" className="flex items-center px-3 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-50">
               <span className="mr-3">🔑</span>
               API Tokens

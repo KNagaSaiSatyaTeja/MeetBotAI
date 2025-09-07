@@ -2,6 +2,8 @@ import { PrismaClient } from '@prisma/client';
 import { EventEmitter } from 'events';
 import { detectPlatform, MeetingPlatform } from '../utils/platform';
 import { ZoomAdapter } from './bot-adapters/zoom';
+import { GoogleMeetAdapter } from './bot-adapters/google-meet';
+import { TeamsAdapter } from './bot-adapters/teams';
 import { RecordingService } from './recordingService';
 import { storageAdapter } from '../adapters/storage';
 import { resourceManager } from './resourceManager';
@@ -129,6 +131,14 @@ export class MeetingBot extends EventEmitter {
         switch (this.platform) {
             case 'zoom':
                 this.adapter = new ZoomAdapter();
+                this.setupAdapterEvents();
+                break;
+            case 'google-meet':
+                this.adapter = new GoogleMeetAdapter();
+                this.setupAdapterEvents();
+                break;
+            case 'teams':
+                this.adapter = new TeamsAdapter();
                 this.setupAdapterEvents();
                 break;
             default:

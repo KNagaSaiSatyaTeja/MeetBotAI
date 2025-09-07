@@ -62,13 +62,25 @@ export const Api = {
     return apiFetch<{ token: string; user: any }>('/v1/supabase/exchange', { method: 'POST', body: { accessToken } });
   },
 
+  // Google OAuth
+  getGoogleAuthUrl(redirectUri?: string) {
+    const params = redirectUri ? `?redirect_uri=${encodeURIComponent(redirectUri)}` : '';
+    return apiFetch<{ url: string; state: string }>(`/v1/google/url${params}`);
+  },
+  googleCallback(code: string, state?: string) {
+    return apiFetch<{ token: string; user: any }>('/v1/google/callback', {
+      method: 'POST',
+      body: { code, state }
+    });
+  },
+
   // Meetings
   listMeetings(token: string, params?: Record<string, string | number | boolean | undefined>) {
     const qs = params
       ? '?' + Object.entries(params)
-          .filter(([, v]) => v !== undefined && v !== null)
-          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-          .join('&')
+        .filter(([, v]) => v !== undefined && v !== null)
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+        .join('&')
       : '';
     return apiFetch(`/v1/meetings${qs}`, { token });
   },
@@ -77,6 +89,39 @@ export const Api = {
   },
   createMeeting(token: string, input: { title: string; platform: string; meetingLink?: string; scheduledAt?: string }) {
     return apiFetch('/v1/meetings', { method: 'POST', token, body: input });
+  },
+  updateMeeting(token: string, id: string, input: any) {
+    return apiFetch(`/v1/meetings/${id}`, { method: 'PUT', token, body: input });
+  },
+  deleteMeeting(token: string, id: string) {
+    return apiFetch(`/v1/meetings/${id}`, { method: 'DELETE', token });
+  },
+
+  // Bot Management
+  joinMeeting(token: string, input: { meetingLink: string; title?: string; displayName?: string; passcode?: string; consentFlags?: any }) {
+    return apiFetch('/v1/bot/join', { method: 'POST', token, body: input });
+  },
+  getBotStatus(token: string) {
+    return apiFetch('/v1/bot/status', { token });
+  },
+  endBot(token: string, botId: string) {
+    return apiFetch(`/v1/bot/${botId}/end`, { method: 'POST', token });
+  },
+
+  // B2B API
+  b2b: {
+    createBot(token: string, input: any) {
+      return apiFetch('/v1/b2b/bot/create', { method: 'POST', token, body: input });
+    },
+    getBotStatus(token: string, botId: string) {
+      return apiFetch(`/v1/b2b/bot/${botId}/status`, { token });
+    },
+    endBot(token: string, botId: string) {
+      return apiFetch(`/v1/b2b/bot/${botId}/end`, { method: 'POST', token });
+    },
+    listBots(token: string) {
+      return apiFetch('/v1/b2b/bots', { token });
+    }
   },
 
   // Search
@@ -112,9 +157,9 @@ export const Api = {
     getLogs(token: string, params?: { limit?: number; offset?: number }) {
       const qs = params
         ? '?' + Object.entries(params)
-            .filter(([, v]) => v !== undefined)
-            .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-            .join('&')
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+          .join('&')
         : '';
       return apiFetch(`/v1/admin/logs${qs}`, { token });
     },

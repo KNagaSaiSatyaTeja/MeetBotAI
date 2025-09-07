@@ -45,21 +45,44 @@ export async function authRoutes(fastify: FastifyInstance) {
     }, async (request: FastifyRequest<{ Body: { accessToken: string } }>, reply: FastifyReply) => {
         const { accessToken } = request.body;
         const SUPABASE_URL = process.env.SUPABASE_URL;
-        const SUPABASE_JWKS_URL = process.env.SUPABASE_JWKS_URL || (SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/certs` : undefined);
+        const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
-        if (!SUPABASE_JWKS_URL) {
-            return reply.status(400).send({ error: 'Supabase configuration missing' });
+        if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+            return reply.status(400).send({
+                error: 'Supabase configuration missing',
+                message: 'Supabase URL and API key are required',
+                statusCode: 400
+            });
         }
 
         try {
-            const JWKS = createRemoteJWKSet(new URL(SUPABASE_JWKS_URL));
-            const { payload } = await jwtVerify(accessToken, JWKS);
+            // Use Supabase REST API to verify the token instead of JWKS
+            const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'apikey': SUPABASE_ANON_KEY,
+                },
+            });
 
-            const email = (payload as any).email as string | undefined;
-            const sub = (payload as any).sub as string | undefined;
+            if (!response.ok) {
+                fastify.log.error({ status: response.status, statusText: response.statusText }, 'Supabase user verification failed');
+                return reply.status(401).send({
+                    error: 'Invalid Supabase token',
+                    message: 'The provided Supabase token is invalid or expired',
+                    statusCode: 401
+                });
+            }
+
+            const userData = await response.json();
+            const email = userData.email;
+            const sub = userData.id;
 
             if (!email || !sub) {
-                return reply.status(401).send({ error: 'Invalid Supabase token' });
+                return reply.status(401).send({
+                    error: 'Invalid user data from Supabase',
+                    message: 'User data from Supabase is missing required fields',
+                    statusCode: 401
+                });
             }
 
             // Find or create user/org
@@ -77,6 +100,7 @@ export async function authRoutes(fastify: FastifyInstance) {
                     data: {
                         orgId: organization.id,
                         email,
+                        name: userData.user_metadata?.full_name || userData.user_metadata?.name || email.split('@')[0],
                         role: 'ADMIN',
                         provider: 'supabase',
                         consentFlags: {},
@@ -85,11 +109,23 @@ export async function authRoutes(fastify: FastifyInstance) {
             }
 
             const token = generateJWT(user.id, user.orgId, '24h');
-            return reply.send({ token, user: { id: user.id, email: user.email, role: user.role } });
+            return reply.send({
+                token,
+                user: {
+                    id: user.id,
+                    email: user.email,
+                    role: user.role,
+                    name: user.name
+                }
+            });
         } catch (error) {
             if ((error as any).statusCode) throw error as any;
             fastify.log.error(error, 'Supabase exchange failed');
-            return reply.status(401).send({ error: 'Supabase verification failed' });
+            return reply.status(401).send({
+                error: 'Supabase verification failed',
+                message: 'Failed to verify Supabase token',
+                statusCode: 401
+            });
         }
     });
     // User registration
@@ -487,17 +523,16 @@ export async function authRoutes(fastify: FastifyInstance) {
         }
     });
 
-    // OAuth callback handler (stub for Google/Microsoft)
-    fastify.post('/oauth/callback', {
+    // Google OAuth callback handler
+    fastify.post('/google/callback', {
         schema: {
             body: {
                 type: 'object',
                 properties: {
-                    provider: { type: 'string', enum: ['google', 'microsoft'] },
                     code: { type: 'string' },
                     state: { type: 'string' },
                 },
-                required: ['provider', 'code'],
+                required: ['code'],
             },
             response: {
                 200: {
@@ -517,25 +552,169 @@ export async function authRoutes(fastify: FastifyInstance) {
                 400: ErrorResponseSchema,
             },
             tags: ['Authentication'],
-            summary: 'OAuth callback',
-            description: 'Handles OAuth callback from identity providers',
+            summary: 'Google OAuth callback',
+            description: 'Handles Google OAuth callback and creates/logs in user',
         },
     }, async (request: FastifyRequest<{
-        Body: { provider: string, code: string, state?: string }
+        Body: { code: string, state?: string }
     }>, reply: FastifyReply) => {
-        const { provider, code } = request.body;
+        const { code } = request.body;
 
         try {
-            // TODO: Implement actual OAuth flow
-            // This is a stub implementation
-            fastify.log.info({ provider, code }, 'OAuth callback received');
+            // Exchange code for tokens with Google
+            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                    client_id: process.env.GOOGLE_CLIENT_ID || '',
+                    client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
+                    code,
+                    grant_type: 'authorization_code',
+                    redirect_uri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/v1/auth/google/callback',
+                }),
+            });
 
-            // For now, return a mock response
-            throw fastify.httpErrors.notImplemented('OAuth integration not yet implemented');
+            if (!tokenResponse.ok) {
+                throw new Error('Failed to exchange code for tokens');
+            }
+
+            const tokens = await tokenResponse.json();
+
+            // Get user info from Google
+            const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                headers: {
+                    Authorization: `Bearer ${tokens.access_token}`,
+                },
+            });
+
+            if (!userResponse.ok) {
+                throw new Error('Failed to get user info from Google');
+            }
+
+            const googleUser = await userResponse.json();
+            const { email, name, picture } = googleUser;
+
+            if (!email) {
+                return reply.status(400).send({ error: 'Email not provided by Google' });
+            }
+
+            // Find or create user
+            let user = await fastify.prisma.user.findUnique({ where: { email } });
+            if (!user) {
+                // Create organization for new user
+                const organization = await fastify.prisma.organization.create({
+                    data: {
+                        name: email.split('@')[1] || 'Personal',
+                        plan: 'free',
+                        region: 'us',
+                        retentionDays: 30,
+                    },
+                });
+
+                user = await fastify.prisma.user.create({
+                    data: {
+                        orgId: organization.id,
+                        email,
+                        name,
+                        role: 'ADMIN',
+                        provider: 'google',
+                        consentFlags: {},
+                        oauthTokens: {
+                            google: {
+                                access_token: tokens.access_token,
+                                refresh_token: tokens.refresh_token,
+                                expires_at: Date.now() + (tokens.expires_in * 1000),
+                            },
+                        },
+                    },
+                });
+
+                fastify.log.info({ userId: user.id, email }, 'New user created via Google OAuth');
+            } else {
+                // Update existing user's OAuth tokens
+                await fastify.prisma.user.update({
+                    where: { id: user.id },
+                    data: {
+                        oauthTokens: {
+                            ...user.oauthTokens as any,
+                            google: {
+                                access_token: tokens.access_token,
+                                refresh_token: tokens.refresh_token,
+                                expires_at: Date.now() + (tokens.expires_in * 1000),
+                            },
+                        },
+                    },
+                });
+            }
+
+            const token = generateJWT(user.id, user.orgId, '24h');
+            return reply.send({
+                token,
+                user: {
+                    id: user.id,
+                    email: user.email,
+                    role: user.role,
+                    name: user.name
+                }
+            });
         } catch (error) {
-            if (error.statusCode) throw error;
-            fastify.log.error(error, 'OAuth callback failed');
-            throw fastify.httpErrors.internalServerError('OAuth callback failed');
+            fastify.log.error(error, 'Google OAuth callback failed');
+            return reply.status(400).send({ error: 'Google OAuth authentication failed' });
         }
+    });
+
+    // Get Google OAuth URL
+    fastify.get('/google/url', {
+        schema: {
+            querystring: {
+                type: 'object',
+                properties: {
+                    redirect_uri: { type: 'string', format: 'uri' },
+                },
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        url: { type: 'string', format: 'uri' },
+                        state: { type: 'string' },
+                    },
+                },
+                400: ErrorResponseSchema,
+            },
+            tags: ['Authentication'],
+            summary: 'Get Google OAuth URL',
+            description: 'Returns Google OAuth authorization URL for frontend redirect',
+        },
+    }, async (request: FastifyRequest<{
+        Querystring: { redirect_uri?: string }
+    }>, reply: FastifyReply) => {
+        const clientId = process.env.GOOGLE_CLIENT_ID;
+        const redirectUri = request.query.redirect_uri || process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/v1/auth/google/callback';
+
+        if (!clientId) {
+            return reply.status(400).send({
+                error: 'Google OAuth not configured',
+                message: 'Google OAuth credentials are not configured on the server',
+                statusCode: 400
+            });
+        }
+
+        const state = crypto.randomBytes(16).toString('hex');
+        const scope = 'openid email profile';
+
+        const params = new URLSearchParams({
+            client_id: clientId,
+            redirect_uri: redirectUri,
+            response_type: 'code',
+            scope,
+            state,
+        });
+
+        const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+
+        return reply.send({ url, state });
     });
 }

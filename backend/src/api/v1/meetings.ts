@@ -94,7 +94,7 @@ export async function meetingsRoutes(fastify: FastifyInstance) {
         try {
             // Admin can see all meetings, users can only see their own
             const whereClause = role === 'ADMIN' ? { id } : { id, userId };
-            
+
             const meeting = await fastify.prisma.meeting.findFirst({
                 where: whereClause,
                 include: {
