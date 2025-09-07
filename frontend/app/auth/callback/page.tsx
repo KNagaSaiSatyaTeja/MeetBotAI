@@ -8,7 +8,7 @@ import { useAuth } from '@/store/auth'
 
 export default function AuthCallbackPage() {
   const router = useRouter()
-  const { user } = useAuth()
+  const { exchangeSupabaseToken } = useAuth()
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -19,15 +19,14 @@ export default function AuthCallbackPage() {
         return
       }
       try {
-        const res = await Api.exchangeSupabaseToken(data.session.access_token)
-        ;(useAuth as any).setState({ token: (res as any).token, user: (res as any).user })
+        await exchangeSupabaseToken(data.session.access_token)
         router.replace('/')
       } catch (e: any) {
         setError(e.message)
       }
     }
     run()
-  }, [router])
+  }, [router, exchangeSupabaseToken])
 
   return (
     <div className="min-h-screen flex items-center justify-center">

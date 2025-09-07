@@ -4,19 +4,57 @@ import { ReactNode } from 'react'
 import { useAuth } from '@/store/auth'
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
+import { Avatar } from '@/components/ui/avatar'
 
 interface AppLayoutProps {
   children: ReactNode
 }
 
 export function AppLayout({ children }: AppLayoutProps) {
-  const { user, logout, isAdmin } = useAuth()
+  const { user, logout, isAdmin, token, _hasHydrated } = useAuth()
   const router = useRouter()
+  
   useEffect(() => {
-    if (!user) {
+    console.log('🔍 AppLayout auth check:', { 
+      hasHydrated: _hasHydrated, 
+      hasToken: !!token, 
+      hasUser: !!user,
+      userEmail: user?.email 
+    })
+    
+    // Only redirect to login if:
+    // 1. Store has been hydrated (to avoid redirecting during initial load)
+    // 2. No token exists (user is not authenticated)
+    // 3. No user object exists (authentication failed)
+    if (_hasHydrated && !token && !user) {
+      console.log('🔒 No authentication found, redirecting to login')
       router.replace('/login')
     }
-  }, [user, router])
+  }, [user, token, _hasHydrated, router])
+  
+  // Show loading state while store is hydrating
+  if (!_hasHydrated) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+  
+  // Show loading state if we have a token but no user yet (fetchMe in progress)
+  if (token && !user) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Authenticating...</p>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="min-h-screen bg-background">
       {/* Sidebar */}
@@ -94,13 +132,22 @@ export function AppLayout({ children }: AppLayoutProps) {
           {/* User section */}
           <div className="p-4 border-t">
             <div className="flex items-center space-x-3">
-              <div className="h-8 w-8 bg-gray-300 rounded-full"></div>
+              <Avatar user={user} size="md" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-gray-900 truncate">{user?.email || 'Guest'}</p>
                 <p className="text-xs text-gray-500 truncate">{user?.role || ''}</p>
               </div>
             </div>
-            <button onClick={logout} className="mt-3 text-xs text-blue-600">Sign out</button>
+            <div className="mt-3 flex space-x-2">
+              <button 
+                onClick={() => router.push('/settings')} 
+                className="text-xs text-gray-600 hover:text-gray-900"
+              >
+                Settings
+              </button>
+              <span className="text-xs text-gray-300">•</span>
+              <button onClick={logout} className="text-xs text-blue-600 hover:text-blue-800">Sign out</button>
+            </div>
           </div>
         </div>
       </div>

@@ -237,7 +237,7 @@ async function authenticateJWT(request: FastifyRequest, reply: FastifyReply, tok
     try {
         const payload = jwt.verify(token, JWT_SECRET) as any;
 
-        if (!payload.sub || !payload.orgId) {
+        if (!payload.sub) {
             throw request.server.httpErrors.unauthorized('Invalid token payload');
         }
 

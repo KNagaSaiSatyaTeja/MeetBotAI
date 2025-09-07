@@ -1,5 +1,6 @@
 // Lightweight API client for the frontend
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+console.log('🔧 API_BASE_URL configured as:', API_BASE_URL);
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
@@ -21,9 +22,22 @@ export async function apiFetch<T = any>(path: string, options: ApiRequestOptions
 
   if (token) {
     reqHeaders['Authorization'] = `Bearer ${token}`;
+    console.log('🔑 API Request with token:', { path, method, hasToken: !!token });
+  } else {
+    console.log('❌ API Request without token:', { path, method });
   }
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  const fullUrl = `${API_BASE_URL}${path}`;
+  console.log('🌐 Making API request to:', fullUrl);
+  console.log('📤 Request details:', {
+    method,
+    headers: reqHeaders,
+    body: body ? JSON.stringify(body) : undefined,
+    bodyType: typeof body,
+    bodyStringified: body ? JSON.stringify(body) : 'undefined'
+  });
+
+  const res = await fetch(fullUrl, {
     method,
     headers: reqHeaders,
     body: body ? JSON.stringify(body) : undefined,
@@ -40,6 +54,7 @@ export async function apiFetch<T = any>(path: string, options: ApiRequestOptions
   }
 
   if (!res.ok) {
+    console.log('❌ API Error:', { path, status: res.status, data });
     const message = (data && (data.message || data.error)) || `Request failed with ${res.status}`;
     throw new Error(message);
   }

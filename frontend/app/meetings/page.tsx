@@ -35,7 +35,10 @@ export default function MeetingsPage() {
       setLoading(true)
       try {
         const res = await Api.listMeetings(token, { limit: 50 })
-        setMeetings(res.items || res || [])
+        console.log('📊 Meetings API response:', res)
+        const meetingsData = res.data || res.items || res || []
+        console.log('📋 Processed meetings data:', meetingsData)
+        setMeetings(meetingsData)
       } catch (e: any) {
         setError(e.message)
       } finally {
@@ -200,7 +203,7 @@ export default function MeetingsPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {meetings.map((meeting) => (
+            {Array.isArray(meetings) ? meetings.map((meeting) => (
               <a
                 key={meeting.id}
                 href={`/meetings/${meeting.id}`}
@@ -229,7 +232,11 @@ export default function MeetingsPage() {
                   </div>
                 )}
               </a>
-            ))}
+            )) : (
+              <div className="col-span-full text-center text-gray-500 py-8">
+                No meetings data available
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -175,7 +175,11 @@ export async function authRoutes(fastify: FastifyInstance) {
             });
 
             if (existingUser) {
-                return reply.status(409).send({ error: 'User already exists' });
+                return reply.status(409).send({
+                    error: 'User already exists',
+                    message: 'A user with this email already exists',
+                    statusCode: 409
+                });
             }
 
             // Hash password
@@ -262,18 +266,30 @@ export async function authRoutes(fastify: FastifyInstance) {
             });
 
             if (!user || !user.isActive) {
-                return reply.status(401).send({ error: 'Invalid credentials' });
+                return reply.status(401).send({
+                    error: 'Invalid credentials',
+                    message: 'Invalid email or password',
+                    statusCode: 401
+                });
             }
 
             // Get password hash from passwordHash field
             if (!user.passwordHash) {
-                return reply.status(401).send({ error: 'Invalid credentials' });
+                return reply.status(401).send({
+                    error: 'Invalid credentials',
+                    message: 'Invalid email or password',
+                    statusCode: 401
+                });
             }
 
             // Verify password
             const isValidPassword = await bcrypt.compare(password, user.passwordHash);
             if (!isValidPassword) {
-                return reply.status(401).send({ error: 'Invalid credentials' });
+                return reply.status(401).send({
+                    error: 'Invalid credentials',
+                    message: 'Invalid email or password',
+                    statusCode: 401
+                });
             }
 
             // Generate JWT token
@@ -597,7 +613,11 @@ export async function authRoutes(fastify: FastifyInstance) {
             const { email, name, picture } = googleUser;
 
             if (!email) {
-                return reply.status(400).send({ error: 'Email not provided by Google' });
+                return reply.status(400).send({
+                    error: 'Email not provided by Google',
+                    message: 'Google OAuth did not provide an email address',
+                    statusCode: 400
+                });
             }
 
             // Find or create user
@@ -661,7 +681,11 @@ export async function authRoutes(fastify: FastifyInstance) {
             });
         } catch (error) {
             fastify.log.error(error, 'Google OAuth callback failed');
-            return reply.status(400).send({ error: 'Google OAuth authentication failed' });
+            return reply.status(400).send({
+                error: 'Google OAuth authentication failed',
+                message: 'Failed to authenticate with Google OAuth',
+                statusCode: 400
+            });
         }
     });
 

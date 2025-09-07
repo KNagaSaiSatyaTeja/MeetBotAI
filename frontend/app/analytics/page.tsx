@@ -30,14 +30,14 @@ interface AnalyticsData {
 }
 
 export default function AnalyticsPage() {
-  const { token } = useAuth()
+  const { token, isAdmin } = useAuth()
   const [data, setData] = useState<AnalyticsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
-      if (!token) return
+      if (!token || !isAdmin()) return
       setLoading(true)
       try {
         const res = await Api.admin.getHealth(token)
@@ -49,7 +49,20 @@ export default function AnalyticsPage() {
       }
     }
     load()
-  }, [token])
+  }, [token, isAdmin])
+
+  if (!isAdmin()) {
+    return (
+      <AppLayout>
+        <div className="container py-6">
+          <div className="text-center">
+            <h1 className="text-2xl font-semibold text-red-600">Access Denied</h1>
+            <p className="text-gray-600 mt-2">You need admin privileges to access this page.</p>
+          </div>
+        </div>
+      </AppLayout>
+    )
+  }
 
   if (loading) {
     return (

@@ -212,8 +212,8 @@ export async function b2bRoutes(fastify: FastifyInstance) {
                 where: { id: activeBot.meetingId },
                 include: {
                     recordings: true,
-                    transcript: true,
-                    summary: true
+                    transcripts: true,
+                    summaries: true
                 }
             });
 
@@ -227,8 +227,8 @@ export async function b2bRoutes(fastify: FastifyInstance) {
 
             // Get latest recording
             const latestRecording = meeting.recordings?.[0];
-            const transcript = meeting.transcript?.[0];
-            const summary = meeting.summary?.[0];
+            const transcript = meeting.transcripts?.[0];
+            const summary = meeting.summaries?.[0];
 
             return reply.send({
                 botId: activeBot.id,
@@ -410,11 +410,11 @@ export async function b2bRoutes(fastify: FastifyInstance) {
                         orderBy: { createdAt: 'desc' },
                         take: 1
                     },
-                    transcript: {
+                    transcripts: {
                         orderBy: { createdAt: 'desc' },
                         take: 1
                     },
-                    summary: {
+                    summaries: {
                         orderBy: { createdAt: 'desc' },
                         take: 1
                     }
@@ -430,8 +430,8 @@ export async function b2bRoutes(fastify: FastifyInstance) {
             }
 
             const recording = meeting.recordings?.[0];
-            const transcript = meeting.transcript?.[0];
-            const summary = meeting.summary?.[0];
+            const transcript = meeting.transcripts?.[0];
+            const summary = meeting.summaries?.[0];
 
             const duration = meeting.endedAt && meeting.startedAt
                 ? Math.floor((meeting.endedAt.getTime() - meeting.startedAt.getTime()) / 1000)
@@ -515,8 +515,8 @@ export async function b2bRoutes(fastify: FastifyInstance) {
                 where: { orgId },
                 include: {
                     recordings: { take: 1 },
-                    transcript: { take: 1 },
-                    summary: { take: 1 }
+                    transcripts: { take: 1 },
+                    summaries: { take: 1 }
                 },
                 orderBy: { createdAt: 'desc' },
                 take: limit,
@@ -525,8 +525,8 @@ export async function b2bRoutes(fastify: FastifyInstance) {
 
             const bots = meetings.map(meeting => {
                 const recording = meeting.recordings?.[0];
-                const transcript = meeting.transcript?.[0];
-                const summary = meeting.summary?.[0];
+                const transcript = meeting.transcripts?.[0];
+                const summary = meeting.summaries?.[0];
 
                 return {
                     botId: `meeting_${meeting.id}`,

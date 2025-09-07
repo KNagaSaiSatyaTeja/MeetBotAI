@@ -1,8 +1,24 @@
 'use client'
 
 import { AppLayout } from '@/components/layout/app-layout'
+import { useAuth } from '@/store/auth'
 
 export default function AdminBillingPage() {
+  const { isAdmin } = useAuth()
+
+  if (!isAdmin()) {
+    return (
+      <AppLayout>
+        <div className="container py-6">
+          <div className="text-center">
+            <h1 className="text-2xl font-semibold text-red-600">Access Denied</h1>
+            <p className="text-gray-600 mt-2">You need admin privileges to access this page.</p>
+          </div>
+        </div>
+      </AppLayout>
+    )
+  }
+
   return (
     <AppLayout>
       <div className="container py-6">
