@@ -87,18 +87,10 @@ export class ConnectionPool {
 
     private createConnection(): PrismaClient {
         const connection = new PrismaClient({
-            log: process.env.NODE_ENV === 'development' ? ['query', 'info', 'warn', 'error'] : ['error'],
-            datasources: {
-                db: {
-                    url: process.env.DATABASE_URL
-                }
-            }
+            log: process.env.NODE_ENV === 'development' ? ['query', 'info', 'warn', 'error'] : ['error']
         });
 
-        // Add connection monitoring
-        connection.$on('beforeExit', () => {
-            console.log('🔗 Database connection closed');
-        });
+        // Connection monitoring is handled globally, not per connection
 
         return connection;
     }

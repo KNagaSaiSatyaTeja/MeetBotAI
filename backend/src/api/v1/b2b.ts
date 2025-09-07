@@ -19,19 +19,23 @@ const CreateBotRequestSchema = z.object({
     metadata: z.record(z.any()).optional()
 });
 
-const BotStatusResponseSchema = z.object({
-    botId: z.string(),
-    meetingId: z.string(),
-    status: z.enum(['joining', 'active', 'ending', 'failed']),
-    platform: z.string(),
-    startTime: z.string(),
-    lastActivity: z.string(),
-    recordingStarted: z.boolean(),
-    recordingFile: z.string().optional(),
-    transcript: z.string().optional(),
-    summary: z.string().optional(),
-    mom: z.string().optional()
-});
+const BotStatusResponseSchema = {
+    type: 'object',
+    properties: {
+        botId: { type: 'string' },
+        meetingId: { type: 'string' },
+        status: { type: 'string', enum: ['joining', 'active', 'ending', 'failed'] },
+        platform: { type: 'string' },
+        startTime: { type: 'string' },
+        lastActivity: { type: 'string' },
+        recordingStarted: { type: 'boolean' },
+        recordingFile: { type: 'string' },
+        transcript: { type: 'string' },
+        summary: { type: 'string' },
+        mom: { type: 'string' }
+    },
+    required: ['botId', 'meetingId', 'status', 'platform', 'startTime', 'lastActivity', 'recordingStarted']
+};
 
 export async function b2bRoutes(fastify: FastifyInstance) {
 

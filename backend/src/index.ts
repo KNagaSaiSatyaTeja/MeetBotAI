@@ -75,18 +75,18 @@ async function buildApp() {
         // Test Redis connection with timeout
         await Promise.race([
             redis.ping(),
-            new Promise((_, reject) => 
+            new Promise((_, reject) =>
                 setTimeout(() => reject(new Error('Connection timeout')), 3000)
             )
         ]);
-        
+
         logger.info('Redis connected successfully');
 
         // Setup job queue
         jobQueue = await setupQueue(redis);
         injectJobContext(jobQueue, { redis, prisma });
         (global as any).__jobQueue = jobQueue;
-        
+
         logger.info('Job queue initialized');
     } catch (error) {
         logger.warn('Redis connection failed - running without background jobs');
