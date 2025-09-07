@@ -34,7 +34,12 @@ export async function meetingsRoutes(fastify: FastifyInstance) {
         try {
             const meeting = await fastify.prisma.meeting.create({
                 data: {
-                    ...meetingData,
+                    title: meetingData.title,
+                    platform: meetingData.platform,
+                    meetingLink: meetingData.meetingLink || null,
+                    scheduledAt: meetingData.scheduledAt ? new Date(meetingData.scheduledAt) : null,
+                    consentFlags: meetingData.consentFlags || {},
+                    metadata: meetingData.metadata || {},
                     userId,
                     orgId: orgId || null,
                     status: 'SCHEDULED',

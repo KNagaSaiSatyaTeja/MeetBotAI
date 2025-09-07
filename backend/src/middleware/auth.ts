@@ -260,7 +260,8 @@ async function authenticateJWT(request: FastifyRequest, reply: FastifyReply, tok
             throw request.server.httpErrors.unauthorized('User not found');
         }
 
-        if (user.orgId !== payload.orgId) {
+        // Only check orgId mismatch if both are not null
+        if (user.orgId && payload.orgId && user.orgId !== payload.orgId) {
             throw request.server.httpErrors.unauthorized('Token organization mismatch');
         }
 

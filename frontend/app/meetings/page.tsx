@@ -114,21 +114,21 @@ export default function MeetingsPage() {
               <h2 className="text-lg font-semibold mb-4">Add New Meeting</h2>
               <form onSubmit={handleCreateMeeting} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Meeting Title</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Meeting Title</label>
                   <input
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     required
-                    className="w-full border rounded-md px-3 py-2"
+                    className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                     placeholder="Weekly Team Standup"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Platform</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Platform</label>
                   <select
                     value={platform}
                     onChange={(e) => setPlatform(e.target.value)}
-                    className="w-full border rounded-md px-3 py-2"
+                    className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                   >
                     <option value="google-meet">Google Meet</option>
                     <option value="zoom">Zoom</option>
@@ -136,22 +136,22 @@ export default function MeetingsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Meeting Link (Optional)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Meeting Link (Optional)</label>
                   <input
                     value={meetingLink}
                     onChange={(e) => setMeetingLink(e.target.value)}
                     type="url"
-                    className="w-full border rounded-md px-3 py-2"
+                    className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                     placeholder="https://meet.google.com/..."
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Scheduled Time (Optional)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Scheduled Time (Optional)</label>
                   <input
                     value={scheduledAt}
                     onChange={(e) => setScheduledAt(e.target.value)}
                     type="datetime-local"
-                    className="w-full border rounded-md px-3 py-2"
+                    className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                   />
                 </div>
                 <div className="flex space-x-3">
